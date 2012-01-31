@@ -1,0 +1,3 @@
+makepuppypkg
+------------
+Reads a PUPPYPKG file and compiles a puppy package from it.

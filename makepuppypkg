@@ -1,0 +1,330 @@
+#!/bin/sh
+#
+# Reads a PUPPYPKG file and creates a PET package
+# 
+# There should be one or more files in a build folder:
+# bash/
+#   - PUPPYPKG
+#   - pinstall.sh
+# 
+# this script will read the PUPPYPKG, download any required files,
+# extract them, build the program, then package it
+# 
+# At the end of this script, the build directory should look like:
+# bash/
+#   - PUPPYPKG
+#   - pinstall.sh
+#   - src/
+#     - *source files*
+#   - pkg/
+#     - *compiled files*
+#   - bash-4.0-1-i686.pet
+
+### VARIABLES ###
+buildscript="PUPPYPKG"
+CARCH="i686"
+CHOST="i686-pc-linux-gnu"
+
+CFLAGS="-march=native -Os -pipe"
+CXXFLAGS="${CFLAGS}"
+LDFLAGS="-Wl,-O1,--sort-common,--as-needed,-z,relro,--hash-style=gnu"
+MAKEFLAGS="-j2"
+
+startdir="$PWD"
+srcdir="$startdir/src"
+[ -d "$srcdir" ] && rm -rf "$srcdir"
+mkdir -p "$srcdir"
+pkgdir="$startdir/pkg"
+[ -d "$pkgdir" ] && rm -rf "$pkgdir"
+mkdir -p "$pkgdir"
+### END VARIABLES ###
+
+### FUNCTIONS ###
+
+# error(errorcode, message)
+# prints an error
+error() {
+ echo "Error: $2"
+ exit $1
+}
+
+# inarray(needle, haystack[, haystack][, ...])
+# returns 0 if needle is found, 1 if not
+inarray() {
+ needle="$1"
+ shift
+ while [[ $1 ]]; do
+  [ "$needle" = "$1" ] && return 0 # found it
+  shift
+ done
+ return 1 # didn't find it
+}
+
+# islocal(file)
+# 0 if local, 1 if not
+islocal() {
+ if [[ "$1" == *://* ]]; then
+  return 1 # remote
+ fi
+ return 0 # local
+}
+
+# error(file)
+getlocalfilename() {
+ echo "${1##*/}"
+}
+
+# getabslocalfilename(file)
+getabslocalfilename() {
+ local file="$(getlocalfilename "$1")"
+ if [ -f "$startdir/$file" ]; then
+  echo "$startdir/$file"
+ elif [ -f "$srcdir/$file" ]; then
+  echo "$srcdir/$file"
+ else
+  return 1 # error: couldn't find
+ fi
+ return 0 # found it
+}
+
+# getremotetype(file)
+getremotetype() {
+ echo "${1%%://*}"
+}
+
+# getmd5(file)
+getmd5() {
+ local md5="$(md5sum "$1")"
+ echo "${md5%% *}"
+}
+
+generatemd5() {
+ local localname
+ local output="md5sums=("
+ for file in "${sources[@]}"; do
+  localname="$(getabslocalfilename "$file")"
+  if [ $? -eq 0 ]; then # local or already downloaded
+   output="$output '$(getmd5 "$localname")'"
+  else
+   error 1 "Could not find $(getlocalfilename "$file")"
+  fi
+ done
+ output="$output )"
+ echo "$output"
+}
+
+# checkmd5(file, md5sum)
+checkmd5() {
+ if [ "$2" != "$(getmd5 "$1")" ]; then # | cut -f 1 -d \ " ]; then
+  error 1 "$file does not match it's checksum"
+ fi
+ return 0
+}
+
+getSources() {
+ cd "$startdir"
+ local file
+ local fileNumber=-1
+ local localname
+ local connectType
+ local ret
+ 
+ for file in "${sources[$@]}"; do
+  ((fileNumber++)) # next file number
+  localname="$(getabslocalfilename "$file")"
+  if [ $? -eq 0 ]; then # local or already downloaded
+   # link file
+   if [ ! -f "$srcdir/$(getlocalfilename "$file")" ]; then
+    echo ln -s "$startdir/$(getlocalfilename "$file")" "$srcdir"
+    ln -s "$localname" "$srcdir"
+   fi
+   checkmd5 "$localname" "${md5sums[$fileNumber]}" # check md5 sum
+  else # file doesn't exist
+   islocal "$file"
+   if [ $? -eq 0 ]; then # local 
+    error 1 "Could not find $file"
+   else # remote
+    localname="$(getlocalfilename "$file")"
+    connectType="$(getremotetype "$file")"
+    
+    case "$connectType" in
+     http) 
+      wget -c -t 3 --waitretry=3 -O "${localname}.part" "$file"
+      ret=$? ;;
+     https) 
+      wget -c -t 3 --waitretry=3 --no-check-certificate -O "${localname}.part" "$file"
+      ret=$? ;;
+     ftp)
+      wget -c --passive-ftp -t 3 --waitretry=3 -O "${localname}.part" "$file"
+      ret=$? ;;
+     *) error 1 "Could not download $file: unknown protocol"
+    esac
+    if [ $? -ne 0 ]; then
+     error 1 "Could not download $file"
+    fi
+    checkmd5 "${localname}.part" "${md5sums[$fileNumber]}" # check md5 sum
+    mv "${localname}.part" "$localname"
+    ln -s "$localname" "$srcdir"
+   fi
+  fi
+ done
+}
+
+extractSources() {
+ cd "$srcdir"
+ local file
+ local ret
+ local extractcmd
+ local localname
+ for file in "${sources[$@]}"; do
+  # check if in noextract array
+  inarray "$file" "${noextract[@]}"
+  if [ $? -eq 0 ]; then
+   continue # skip
+  fi
+  
+  localname="$(getlocalfilename "$file")"
+  #[ ! -e "$srcdir/$localname" ]
+  if [[ ! -e "$srcdir/$localname" && -f "$startdir/$localname" ]]; then
+   cd "$startdir"
+   ln -s "$localname" "$srcdir"
+   cd "$srcdir"
+  fi
+  
+  if [[ ! -f "$localname" && ! -L "$localname" ]]; then
+   error 1 "Could not find $localname"
+  fi
+  
+  case "$file" in
+   *tar)
+    tar xf "$localname" &> /dev/null
+    ret=$? ;;
+   *tar.gz)
+    tar xzf "$localname" &> /dev/null
+    ret=$? ;;
+   *tar.bz2)
+    tar xjf "$localname" &> /dev/null
+    ret=$? ;;
+   *tar.xz)
+    tar xJf "$localname" &> /dev/null
+    ret=$? ;;
+   *) continue
+  esac
+  
+  if [ $ret -ne 0 ]; then
+   error 1 "Error extracting $localname"
+  fi
+ done
+}
+
+build() {
+ error 1 "No build function specified in $buildscript"
+}
+
+check() {
+ return 0
+}
+
+package() {
+ return 0
+}
+
+getpetspecs() {
+ local pkgsize="$(du -s -k "$pkgdir/" | cut -f 1)"
+ pkgsize="${pkgsize}"
+ 
+ local pkgdeps
+ local onedep
+ for onedep in "${deps[@]}"; do
+  if [ "$pkgdeps" = "" ]; then
+   pkgdeps="+${onedep}"
+  else
+   pkgdeps="${pkgdeps},+${onedep}"
+  fi
+ done
+ 
+ echo "$pkgfullname|$pkgname|$pkgver|$pkgrev-$CARCH|$pkgcategory|${pkgsize}K||${pkgfullname}.pet|${pkgdeps}|${pkgdesc}|"
+}
+
+compresstopkg() {
+ cd "$startdir"
+ local file
+ local ret
+ for file in "pinstall.sh" "puninstall.sh"; do
+  [ -f "$file" ] && cp "$file" "$pkgdir"
+ done
+ 
+ echo "$(getpetspecs)" > "$pkgdir/pet.specs"
+ 
+ # compress
+ rm -f "${pkgfullname}.pet"
+ mv -f "$pkgdir" "$pkgfullname"
+ tar czf "${pkgfullname}.pet" "${pkgfullname}"
+ ret=$?
+ mv -f "$pkgfullname" "$pkgdir"
+ 
+ if [ $ret -ne 0 ]; then
+  error "Could not compress package"
+ fi
+ 
+ echo -n "$(getmd5 "${pkgfullname}.pet")" >> "${pkgfullname}.pet"
+}
+
+help() {
+ echo "makepuppypkg [options]"
+ echo "Compiles a program into a package using a $buildscript"
+ cat << HERE_EOF
+Options:
+    -g --generate | generate md5 sums of the files in md5sums(), then exit
+    -h --help     | display this help
+HERE_EOF
+}
+
+### END FUNCTIONS ###
+
+### MAIN CODE ###
+
+GENMD5=0
+
+while [[ $1 ]]; do
+ case "$1" in
+  -g|--generate) GENMD5=1 ;;
+  -h|--help) help
+   exit 0 ;;
+ esac
+done
+
+if [ ! -f $buildscript ]; then
+ error 1 "Could not find $buildscript"
+fi
+
+. "./$buildscript"
+
+pkgfullname="$pkgname-$pkgver-$pkgrev-$CARCH"
+
+if [ $GENMD5 -eq 1 ]; then
+ echo "$(generatemd5)" >> $buildscript
+ exit 0
+fi
+
+echo "Get:"
+getSources
+
+echo "Extract:"
+extractSources
+
+echo "Build:"
+build
+
+echo "Check:"
+check
+
+echo "Package:"
+package
+
+echo "Compress:"
+compresstopkg
+
+exit 0
+
+### END MAIN CODE ###
