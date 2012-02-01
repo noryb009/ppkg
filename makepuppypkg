@@ -20,24 +20,7 @@
 #     - *compiled files*
 #   - bash-4.0-1-i686.pet
 
-### VARIABLES ###
 buildscript="PUPPYPKG"
-CARCH="i686"
-CHOST="i686-pc-linux-gnu"
-
-CFLAGS="-march=native -Os -pipe"
-CXXFLAGS="${CFLAGS}"
-LDFLAGS="-Wl,-O1,--sort-common,--as-needed,-z,relro,--hash-style=gnu"
-MAKEFLAGS="-j2"
-
-startdir="$PWD"
-srcdir="$startdir/src"
-[ -d "$srcdir" ] && rm -rf "$srcdir"
-mkdir -p "$srcdir"
-pkgdir="$startdir/pkg"
-[ -d "$pkgdir" ] && rm -rf "$pkgdir"
-mkdir -p "$pkgdir"
-### END VARIABLES ###
 
 ### FUNCTIONS ###
 
@@ -58,6 +41,14 @@ inarray() {
   shift
  done
  return 1 # didn't find it
+}
+
+# splitpartused(splitpart)
+splitpartused() {
+ if [[ "$loc_EXE" = "$1" || "$loc_DEV" = "$1" || "$loc_DOC" = "$1" || "$loc_NLS" = "$1" ]]; then
+  return 0 # is used
+ fi
+ return 1 # is not used
 }
 
 # islocal(file)
@@ -102,8 +93,7 @@ generatemd5() {
  local localname
  local output="md5sums=("
  for file in "${sources[@]}"; do
-  localname="$(getabslocalfilename "$file")"
-  if [ $? -eq 0 ]; then # local or already downloaded
+  if localname="$(getabslocalfilename "$file")"; then # local or already downloaded
    output="$output '$(getmd5 "$localname")'"
   else
    error 1 "Could not find $(getlocalfilename "$file")"
@@ -131,17 +121,14 @@ getSources() {
  
  for file in "${sources[$@]}"; do
   ((fileNumber++)) # next file number
-  localname="$(getabslocalfilename "$file")"
-  if [ $? -eq 0 ]; then # local or already downloaded
+  if localname="$(getabslocalfilename "$file")"; then # local or already downloaded
    # link file
    if [ ! -f "$srcdir/$(getlocalfilename "$file")" ]; then
-    echo ln -s "$startdir/$(getlocalfilename "$file")" "$srcdir"
     ln -s "$localname" "$srcdir"
    fi
    checkmd5 "$localname" "${md5sums[$fileNumber]}" # check md5 sum
   else # file doesn't exist
-   islocal "$file"
-   if [ $? -eq 0 ]; then # local 
+   if islocal "$file"; then # local 
     error 1 "Could not find $file"
    else # remote
     localname="$(getlocalfilename "$file")"
@@ -159,7 +146,7 @@ getSources() {
       ret=$? ;;
      *) error 1 "Could not download $file: unknown protocol"
     esac
-    if [ $? -ne 0 ]; then
+    if [ $ret -ne 0 ]; then
      error 1 "Could not download $file"
     fi
     checkmd5 "${localname}.part" "${md5sums[$fileNumber]}" # check md5 sum
@@ -178,8 +165,7 @@ extractSources() {
  local localname
  for file in "${sources[$@]}"; do
   # check if in noextract array
-  inarray "$file" "${noextract[@]}"
-  if [ $? -eq 0 ]; then
+  if inarray "$file" "${noextract[@]}"; then
    continue # skip
   fi
   
@@ -229,21 +215,67 @@ package() {
  return 0
 }
 
+strip() {
+ strippkg "$pkgdir" &> /dev/null
+}
+
+split() {
+ for part in "${pkgParts[@]}"; do
+  [ -d "${pkgdir}_${part}" ] && rm -rf "${pkgdir}_${part}" # delete split folder
+  splitpartused "$part"
+  [ $? = 1 ] && continue
+  [ -d "$pkgdir-$part" ] && rm -rf "$pkgdir-$part"
+  mkdir -p "$pkgdir-$part"
+  [ "${part}" != "EXE" ] && mkdir -p "${pkgdir}_${part}"
+ done
+ 
+ # back up pkgdir
+ cp -r "$pkgdir" "${pkgdir}-backup"
+ 
+ # split $pkgdir
+ splitpkg "$(basename "$pkgdir")" "$pkgdir" &> /dev/null
+ 
+ # restore backup
+ mv -f "$pkgdir" "${pkgdir}_EXE"
+ 
+ mv -f "${pkgdir}-backup" "$pkgdir"
+ 
+ shopt -s extglob
+ 
+ # redirect output
+ if [[ "$loc_EXE" != "" && "$(ls -A "${pkgdir}_EXE")" ]]; then
+  cp -r "${pkgdir}_EXE/"* "${pkgdir}-${loc_EXE}/"
+ fi
+ if [[ "$loc_DEV" != "" && "$(ls -A "${pkgdir}_DEV")" ]]; then
+  cp -r "${pkgdir}_DEV/"* "${pkgdir}-${loc_DEV}"
+ fi
+ if [[ "$loc_DOC" != "" && "$(ls -A "${pkgdir}_DOC")" ]]; then
+  cp -r "${pkgdir}_DOC/"* "${pkgdir}-${loc_DOC}"
+ fi
+ if [[ "$loc_NLS" != "" && "$(ls -A "${pkgdir}_NLS")" ]]; then
+  cp -r "${pkgdir}_NLS/"* "${pkgdir}-${loc_NLS}"
+ fi
+ 
+ shopt -u extglob
+ 
+ rm -rf "${pkgdir}_"{EXE,DEV,DOC,NLS}
+}
+
+# getpetspecs()
 getpetspecs() {
  local pkgsize="$(du -s -k "$pkgdir/" | cut -f 1)"
  pkgsize="${pkgsize}"
  
  local pkgdeps
  local onedep
+ local onedepname
  for onedep in "${deps[@]}"; do
-  if [ "$pkgdeps" = "" ]; then
-   pkgdeps="+${onedep}"
-  else
-   pkgdeps="${pkgdeps},+${onedep}"
-  fi
+  #if [ "${onedep}"
+  [ "$pkgdeps" != "" ] && pkgdeps="${pkgdeps},"
+  pkgdeps="${pkgdeps}+${onedep}"
  done
  
- echo "$pkgfullname|$pkgname|$pkgver|$pkgrev-$CARCH|$pkgcategory|${pkgsize}K||${pkgfullname}.pet|${pkgdeps}|${pkgdesc}|"
+ echo "${pkgfullname}|${pkgname}${pkgsplit}|$pkgver|${pkgrev}-${CARCH}|$pkgcategory|${pkgsize}K||${pkgfullname}.pet|${pkgdeps}|${pkgdesc}|"
 }
 
 compresstopkg() {
@@ -254,20 +286,42 @@ compresstopkg() {
   [ -f "$file" ] && cp "$file" "$pkgdir"
  done
  
- echo "$(getpetspecs)" > "$pkgdir/pet.specs"
- 
- # compress
- rm -f "${pkgfullname}.pet"
- mv -f "$pkgdir" "$pkgfullname"
- tar czf "${pkgfullname}.pet" "${pkgfullname}"
- ret=$?
- mv -f "$pkgfullname" "$pkgdir"
- 
- if [ $ret -ne 0 ]; then
-  error "Could not compress package"
- fi
- 
- echo -n "$(getmd5 "${pkgfullname}.pet")" >> "${pkgfullname}.pet"
+ local part
+ for part in "${pkgParts[@]}"; do
+  if [ "$part" != "EXE" ]; then
+   pkgsplit="_${part}"
+  else
+   pkgsplit=""
+  fi
+  
+  pkgfullname="${pkgname}${pkgsplit}-$pkgver-$pkgrev-$CARCH" # get package name (with split)
+  rm -f "${pkgfullname}.pet" # delete old package
+  
+  if ! splitpartused "$part"; then # find if package part not used
+   continue
+  fi
+  
+  [ "$(ls -A "$pkgdir-${part}")" ] || continue # skip if package is empty
+  # compress
+  mv -f "$pkgdir-${part}" "$pkgfullname"
+  echo "$(getpetspecs)" > "$pkgfullname/pet.specs"
+  tar czf "${pkgfullname}.pet" "${pkgfullname}"
+  ret=$?
+  mv -f "$pkgfullname" "$pkgdir-${part}"
+  
+  if [ $ret -ne 0 ]; then
+   error "Could not compress the package"
+  fi
+  
+  echo -n "$(getmd5 "${pkgfullname}.pet")" >> "${pkgfullname}.pet"
+ done
+}
+
+cleanup() {
+ local folder
+ for folder in 'src' 'pkg' 'pkg-EXE' 'pkg-DEV' 'pkg-DOC' 'pkg-NLS'; do
+  [ -d "$folder" ] && rm -rf "$folder"
+ done
 }
 
 help() {
@@ -281,6 +335,61 @@ HERE_EOF
 }
 
 ### END FUNCTIONS ###
+
+### VARIABLES ###
+#default flags
+MAKEFLAGS="-j$(($(grep -c ^processor /proc/cpuinfo)+1))"
+LDFLAGS="-Wl,-O1,--sort-common,--as-needed,-z,relro,--hash-style=gnu"
+CARCH="$(uname -m)"
+case "$CARCH" in
+ i?86)
+  #CARCH="$(uname -m)"
+  CHOST="${CARCH}-puppy-linux-gnu"
+  CFLAGS="-march=${CARCH} -mtune=generic -pipe -fstack-protector --param=ssp-buffer-size=4 -D_FORTIFY_SOURCE=2"
+  CXXFLAGS="${CFLAGS}" ;;
+ x86_64)
+  #CARCH="x86_64"
+  CHOST="x86_64-puppy-linux-gnu"
+  CFLAGS="-march=x86-64 -mtune=generic -Os -pipe -fstack-protector --param=ssp-buffer-size=4 -D_FORTIFY_SOURCE=2"
+  CXXFLAGS="${CFLAGS}" ;;
+esac
+loc_EXE='EXE'
+loc_DEV='DEV'
+loc_DOC='DOC'
+loc_NLS='NLS'
+
+# include makepuppypkg.conf
+if [ -f makepuppypkg.conf ]; then
+ . ./makepuppypkg.conf
+elif [ -f ~/.makepuppypkg.conf ]; then
+ . ~/.makepuppypkg.conf
+elif [ -f /etc/makepuppypkg.conf ]; then
+ . /etc/makepuppypkg.conf
+else
+ error 1 "Could not find makepuppypkg.conf"
+fi
+
+# need CARCH and CHOST
+[[ "$CARCH" = "" ]] && echo "Could not find CARCH. Please define it in makepuppypkg.conf"
+[[ "$CHOST" = "" ]] && echo "Could not find CHOST. Please define it in makepuppypkg.conf"
+
+pkgParts=( 'EXE' 'DEV' 'DOC' 'NLS' )
+
+##default buildoptions
+#BUILDOPTIONS=(-deletesrcs deletesrc deletepkg)
+#OPTIONS=(+strip)
+
+startdir="$PWD"
+
+srcdir="$startdir/src"
+[ -d "$srcdir" ] && rm -rf "$srcdir"
+mkdir -p "$srcdir"
+
+pkgdir="$startdir/pkg"
+[ -d "$pkgdir" ] && rm -rf "$pkgdir"
+mkdir -p "$pkgdir"
+
+### END VARIABLES ###
 
 ### MAIN CODE ###
 
@@ -300,8 +409,6 @@ fi
 
 . "./$buildscript"
 
-pkgfullname="$pkgname-$pkgver-$pkgrev-$CARCH"
-
 if [ $GENMD5 -eq 1 ]; then
  echo "$(generatemd5)" >> $buildscript
  exit 0
@@ -313,6 +420,8 @@ getSources
 echo "Extract:"
 extractSources
 
+export CFLAGS CXXFLAGS LDFLAGS MAKEFLAGS CHOST # export flags
+
 echo "Build:"
 build
 
@@ -322,8 +431,17 @@ check
 echo "Package:"
 package
 
+echo "Strip:"
+strip
+
+echo "Split:"
+split
+
 echo "Compress:"
 compresstopkg
+
+echo "Clean:"
+cleanup
 
 exit 0
 
