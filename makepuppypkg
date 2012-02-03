@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash -e
 #
 # Reads a PUPPYPKG file and creates a PET package
 # 
@@ -24,16 +24,50 @@ buildscript="PUPPYPKG"
 
 ### FUNCTIONS ###
 
+# plain()
+plain() {
+ echo "    $1"
+}
+
+# msg()
+msg() {
+ echo "=> $1"
+}
+
+# msg2()
+msg2() {
+ echo "  -> $1"
+}
+
+# warning(message)
+# prints an error, but doesn't exit
+warning() {
+ echo "Warning: $1"
+}
+
 # error(errorcode, message)
 # prints an error
 error() {
- echo "Error: $2"
- exit $1
+ if [ $# -eq 2 ]; then
+  echo "Error: $2"
+  exit $1
+ else
+  echo "Error: $1"
+  exit 1
+ fi
 }
 
-# inarray(needle, haystack[, haystack][, ...])
+safeExit() {
+ if [ "$#" -ne 0 ]; then
+  error 1 "$@"
+ else
+  error 1 "Unknown error"
+ fi
+}
+
+# inArray(needle, haystack[, haystack][, ...])
 # returns 0 if needle is found, 1 if not
-inarray() {
+inArray() {
  needle="$1"
  shift
  while [[ $1 ]]; do
@@ -60,7 +94,19 @@ islocal() {
  return 0 # local
 }
 
-# error(file)
+# getRealPath(path)
+getRealPath() {
+ if [ -d "$1" ]; then
+ (
+  cd "$1"
+  pwd -P
+ )
+ else
+  echo "$1"
+ fi
+}
+
+# getlocalfilename(file)
 getlocalfilename() {
  echo "${1##*/}"
 }
@@ -89,7 +135,7 @@ getmd5() {
  echo "${md5%% *}"
 }
 
-generatemd5() {
+generateMD5() {
  local localname
  local output="md5sums=("
  for file in "${sources[@]}"; do
@@ -105,13 +151,15 @@ generatemd5() {
 
 # checkmd5(file, md5sum)
 checkmd5() {
- if [ "$2" != "$(getmd5 "$1")" ]; then # | cut -f 1 -d \ " ]; then
+ [ $skipMD5Check -eq 1 ] && return 0 # skip MD5 check command line option
+ if [ "$2" != "$(getmd5 "$1")" ]; then
   error 1 "$file does not match it's checksum"
  fi
  return 0
 }
 
 getSources() {
+ msg "Getting sources..."
  cd "$startdir"
  local file
  local fileNumber=-1
@@ -155,9 +203,21 @@ getSources() {
    fi
   fi
  done
+ 
+ if [ $genMD5 -eq 1 ]; then # if generating MD5 sums
+  msg "Appending source MD5 sums to $buildscript..."
+  echo "$(generateMD5)" >> $buildscript
+  exit 0
+ fi
+ 
+ if [ $downloadOnly -eq 1 ]; then
+  msg "Sources have been downloaded"
+  exit 0
+ fi
 }
 
 extractSources() {
+ msg "Extracting sources..."
  cd "$srcdir"
  local file
  local ret
@@ -165,7 +225,7 @@ extractSources() {
  local localname
  for file in "${sources[$@]}"; do
   # check if in noextract array
-  if inarray "$file" "${noextract[@]}"; then
+  if inArray "$file" "${noextract[@]}"; then
    continue # skip
   fi
   
@@ -201,33 +261,116 @@ extractSources() {
    error 1 "Error extracting $localname"
   fi
  done
+ 
+ if [ $extractOnly -eq 1 ]; then
+  msg "Sources have been downloaded and extracted"
+  exit 0
+ fi
 }
 
 build() {
- error 1 "No build function specified in $buildscript"
+ msg2 "No build function found"
+ return 0
 }
 
 check() {
+ msg2 "No check function found"
  return 0
 }
 
 package() {
+ msg2 "No package function found"
  return 0
+}
+
+# runFunction(functionName)
+# run a function
+runFunction() {
+ cd "$srcdir"
+ 
+ local shellopts=$(shopt -p) # back up options
+ export CFLAGS CXXFLAGS LDFLAGS MAKEFLAGS CHOST # export flags
+ 
+ if type -p "$1"; then
+  $1 # run function
+ else
+  warning "Could not find function '$1' in $buildscript"
+ fi
+ 
+ eval "$shellopts" # restore options
+}
+
+runBuild() {
+ msg "Building..."
+ runFunction "build"
+ 
+ if [ $buildOnly -eq 1 ]; then
+  msg "The package has been built"
+  exit 0
+ fi
+}
+
+runCheck() {
+ msg "Checking..."
+ runFunction "check"
+}
+
+runPackage() {
+ msg "Packaging..."
+ if [ $MULTIPKG -eq 0 ]; then # not multi package
+  runFunction "package"
+ else
+  runFunction "package_$1"
+ fi
 }
 
 strip() {
  strippkg "$pkgdir" &> /dev/null
 }
 
+runPackageOps() {
+ msg "Running package options..."
+ msg2 "Shrinking binaries and libraries by removing unneeded symbols..."
+ strip
+}
+
+checkpkg() {
+ msg "Checking package..."
+ # from arch's makepkg
+ if find "${pkgdir}" -type f -print0 | xargs -0  grep -q -m 1 -I "${srcdir}" ; then
+  warning "Package contains reference(s) to $srcdir"
+ fi
+ if find "${pkgdir}" -type f -print0 | xargs -0  grep -q -m 1 -I "${pkgdir}" ; then
+  warning "Package contains reference(s) to $pkgdir"
+ fi
+}
+
 split() {
+ msg "Spliting package..."
+ 
+ if [ $forceSplit -eq 1 ]; then # split from commandline
+  skipSplitting=0
+ elif [ $forceSplit -eq 0 ]; then # don't split from commandline
+  skipSplitting=1
+ else
+  skipSplitting=0 # don't skip
+ fi
+ 
  for part in "${pkgParts[@]}"; do
   [ -d "${pkgdir}_${part}" ] && rm -rf "${pkgdir}_${part}" # delete split folder
   splitpartused "$part"
   [ $? = 1 ] && continue
   [ -d "$pkgdir-$part" ] && rm -rf "$pkgdir-$part"
-  mkdir -p "$pkgdir-$part"
+  [ $skipSplitting -eq 1 ] && continue
+  mkdir -p "${pkgdir}-${part}"
   [ "${part}" != "EXE" ] && mkdir -p "${pkgdir}_${part}"
  done
+ 
+ if [ $skipSplitting -eq 1 ]; then
+  msg2 "Skipping splitting"
+  cp -r "$pkgdir" "${pkgdir}-EXE"
+  return 0
+ fi
  
  # back up pkgdir
  cp -r "$pkgdir" "${pkgdir}-backup"
@@ -245,15 +388,23 @@ split() {
  # redirect output
  if [[ "$loc_EXE" != "" && "$(ls -A "${pkgdir}_EXE")" ]]; then
   cp -r "${pkgdir}_EXE/"* "${pkgdir}-${loc_EXE}/"
+  [ -f "$startdir/${pkgname}-pinstall.sh_EXE" ] && cat "$startdir/pinstall.sh_EXE" >> "${pkgdir}-${loc_EXE}/pinstall.sh" && chmod +x "${pkgdir}-${loc_EXE}/pinstall.sh"
+  [ -f "$startdir/${pkgname}-puninstall.sh_EXE" ] && cat "$startdir/puninstall.sh_EXE" >> "${pkgdir}-${loc_EXE}/puninstall.sh" && chmod +x "${pkgdir}-${loc_EXE}/puninstall.sh"
  fi
  if [[ "$loc_DEV" != "" && "$(ls -A "${pkgdir}_DEV")" ]]; then
   cp -r "${pkgdir}_DEV/"* "${pkgdir}-${loc_DEV}"
+  [ -f "$startdir/${pkgname}-pinstall.sh_DEV" ] && cat "$startdir/pinstall.sh_DEV" >> "${pkgdir}-${loc_DEV}/pinstall.sh" && chmod +x "${pkgdir}-${loc_DEV}/pinstall.sh"
+  [ -f "$startdir/${pkgname}-puninstall.sh_DEV" ] && cat "$startdir/puninstall.sh_DEV" >> "${pkgdir}-${loc_DEV}/puninstall.sh" && chmod +x "${pkgdir}-${loc_DEV}/puninstall.sh"
  fi
  if [[ "$loc_DOC" != "" && "$(ls -A "${pkgdir}_DOC")" ]]; then
   cp -r "${pkgdir}_DOC/"* "${pkgdir}-${loc_DOC}"
+  [ -f "$startdir/${pkgname}-pinstall.sh_DOC" ] && cat "$startdir/pinstall.sh_DOC" >> "${pkgdir}-${loc_DOC}/pinstall.sh" && chmod +x "${pkgdir}-${loc_DOC}/pinstall.sh"
+  [ -f "$startdir/${pkgname}-puninstall.sh_DOC" ] && cat "$startdir/puninstall.sh_DOC" >> "${pkgdir}-${loc_DOC}/puninstall.sh" && chmod +x "${pkgdir}-${loc_DOC}/puninstall.sh"
  fi
  if [[ "$loc_NLS" != "" && "$(ls -A "${pkgdir}_NLS")" ]]; then
   cp -r "${pkgdir}_NLS/"* "${pkgdir}-${loc_NLS}"
+  [ -f "$startdir/${pkgname}-pinstall.sh_NLS" ] && cat "$startdir/pinstall.sh_NLS" >> "${pkgdir}-${loc_NLS}/pinstall.sh" && chmod +x "${pkgdir}-${loc_NLS}/pinstall.sh"
+  [ -f "$startdir/${pkgname}-puninstall.sh_NLS" ] && cat "$startdir/puninstall.sh_NLS" >> "${pkgdir}-${loc_NLS}/puninstall.sh" && chmod +x "${pkgdir}-${loc_NLS}/puninstall.sh"
  fi
  
  shopt -u extglob
@@ -279,12 +430,10 @@ getpetspecs() {
 }
 
 compresstopkg() {
+ msg "Compressing package(s)..."
  cd "$startdir"
  local file
  local ret
- for file in "pinstall.sh" "puninstall.sh"; do
-  [ -f "$file" ] && cp "$file" "$pkgdir"
- done
  
  local part
  for part in "${pkgParts[@]}"; do
@@ -295,42 +444,130 @@ compresstopkg() {
   fi
   
   pkgfullname="${pkgname}${pkgsplit}-$pkgver-$pkgrev-$CARCH" # get package name (with split)
-  rm -f "${pkgfullname}.pet" # delete old package
+  rm -f "$outDir/${pkgfullname}.pet" # delete old package
   
-  if ! splitpartused "$part"; then # find if package part not used
-   continue
+  if [ $skipSplitting -eq 0 ]; then # not skipping
+   if ! splitpartused "$part"; then # find if package part not used
+    continue
+   fi
+   [ "$(ls -A "$pkgdir-${part}")" ] || continue # skip if package folder is empty
+  else # skipping splitting
+   [ "$part" != "EXE" ] && continue
   fi
   
-  [ "$(ls -A "$pkgdir-${part}")" ] || continue # skip if package is empty
   # compress
   mv -f "$pkgdir-${part}" "$pkgfullname"
   echo "$(getpetspecs)" > "$pkgfullname/pet.specs"
-  tar czf "${pkgfullname}.pet" "${pkgfullname}"
+  tar czf "$outDir/${pkgfullname}.pet" "${pkgfullname}"
   ret=$?
   mv -f "$pkgfullname" "$pkgdir-${part}"
   
   if [ $ret -ne 0 ]; then
-   error "Could not compress the package"
+   error 1 "Could not compress the package"
   fi
   
-  echo -n "$(getmd5 "${pkgfullname}.pet")" >> "${pkgfullname}.pet"
+  echo -n "$(getmd5 "$outDir/${pkgfullname}.pet")" >> "$outDir/${pkgfullname}.pet"
  done
 }
 
+# cleanup(cleanSrc)
 cleanup() {
+ local goingToClean=0
+ if [ $forceCleanup -eq 1 ]; then # force clean from command line
+  goingToClean=1
+ elif [ $forceCleanup -eq 0 ]; then # force no clean from command line
+  goingToClean=0
+ else # default to cleaning
+  goingToClean=1
+ fi
+ 
+ [ $goingToClean -eq 0 ] && return 0 # skip cleaning
+ 
+ msg "Cleaning up..."
+ local folders=( "$pkgdir" "${pkgdir}-EXE" "${pkgdir}-DEV" "${pkgdir}-DOC" "${pkgdir}-NLS" )
+ [[ "$1" != "" && $1 -eq 1 ]] && folders+=( "$srcdir" )
  local folder
- for folder in 'src' 'pkg' 'pkg-EXE' 'pkg-DEV' 'pkg-DOC' 'pkg-NLS'; do
+ for folder in "${folders[@]}" ; do
   [ -d "$folder" ] && rm -rf "$folder"
  done
+ return 0
+}
+
+runSinglePackage() {
+ runPackage
+ runPackageOps
+ split
+ checkpkg
+ compresstopkg
+ cleanup 1
+}
+
+backupPkgVars() {
+ local var
+ local backupVar
+ for var in "${multipkgBackupVars[@]}"; do
+  backupVar="${var}_bak"
+  eval "${backupVar}=(\"\${$var[@]}\")"
+ done
+}
+
+restorePkgVars() {
+ local var
+ local backupVar
+ for var in "${multipkgBackupVars[@]}"; do
+  backupVar="${var}_bak"
+  eval "${var}=(\"\${$backupVar[@]}\")"
+ done
+}
+
+runMultiPackage() {
+ # back up package vars
+ local _pkgname="${pkgname[@]}"
+ local _pkgdir="$pkgdir"
+ 
+ for pkgname in "${_pkgname[@]}"; do
+  pkgdir="$_pkgdir/$pkgname"
+  mkdir -p "$pkgdir"
+  backupPkgVars
+  
+  runPackage "$pkgname"
+  runPackageOps
+  split
+  checkpkg
+  compresstopkg
+  cleanup 0
+  
+  restorePkgVars
+ done
+ pkgname="${_pkgname[@]}"
+ pkgdir="$_pkgdir"
+ 
+ cleanup 1
 }
 
 help() {
- echo "makepuppypkg [options]"
- echo "Compiles a program into a package using a $buildscript"
  cat << HERE_EOF
+makepuppypkg [options]
+Compiles a program into a package using '$buildscript'
+
 Options:
-    -g --generate | generate md5 sums of the files in md5sums(), then exit
-    -h --help     | display this help
+  -a, --no-arch  | don't check if your architecture is in arch()
+  -b <file>      | use <file> instead of '$buildscript' to create the package
+  -c, --clean-up | clean up build files and folders
+  -C, --no-clean-up| don't clean up build files and folders
+  -g, --generate | generate md5 sums of the source files
+      --skip-md5 | skip source md5sum checks
+  -o <path>      | save package files to <path>
+  -u, --as-user  | run as user
+  
+  -d, --download | download sources, then exit
+  -e, --extract  | download and extract sources, then exit
+  -B, --build    | build package, then exit
+  -s, --split    | split into EXE, DEV, DOC and NLS
+  -S, --no-split | don't split into EXE, DEV, DOC and NLS
+  -D, --only-clean| clean up built packages and build files, then exit
+  
+  -h, --help     | display this help
 HERE_EOF
 }
 
@@ -353,19 +590,30 @@ case "$CARCH" in
   CFLAGS="-march=x86-64 -mtune=generic -Os -pipe -fstack-protector --param=ssp-buffer-size=4 -D_FORTIFY_SOURCE=2"
   CXXFLAGS="${CFLAGS}" ;;
 esac
+
 loc_EXE='EXE'
 loc_DEV='DEV'
 loc_DOC='DOC'
 loc_NLS='NLS'
 
+startdir="$PWD"
+srcdir="$startdir/src"
+pkgdir="$startdir/pkg"
+
+# error catching
+trap 'safeExit "Received TERM signal, exiting..."' TERM
+trap 'safeExit "Received HUP signal, exiting..."' HUP
+trap 'safeExit "Received QUIT signal, exiting..."' QUIT
+trap 'safeExit "Received unknown error, exiting..."' ERR
+trap 'safeExit "Aborted by user, exiting..."' INT
+
 # include makepuppypkg.conf
-if [ -f makepuppypkg.conf ]; then
- . ./makepuppypkg.conf
-elif [ -f ~/.makepuppypkg.conf ]; then
- . ~/.makepuppypkg.conf
-elif [ -f /etc/makepuppypkg.conf ]; then
- . /etc/makepuppypkg.conf
-else
+foundConf=0
+[ -f /etc/makepuppypkg.conf ] && . /etc/makepuppypkg.conf && foundConf=1
+[ -f ~/.makepuppypkg.conf ] && . ~/.makepuppypkg.conf && foundConf=1
+[ -f makepuppypkg.conf ] && . ./makepuppypkg.conf && foundConf=1
+
+if [ $foundConf -eq 0 ]; then # didn't find makepuppypkg.conf
  error 1 "Could not find makepuppypkg.conf"
 fi
 
@@ -373,75 +621,126 @@ fi
 [[ "$CARCH" = "" ]] && echo "Could not find CARCH. Please define it in makepuppypkg.conf"
 [[ "$CHOST" = "" ]] && echo "Could not find CHOST. Please define it in makepuppypkg.conf"
 
-pkgParts=( 'EXE' 'DEV' 'DOC' 'NLS' )
+pkgParts=('EXE' 'DEV' 'DOC' 'NLS')
+multipkgBackupVars=('loc_EXE' 'loc_DEV' 'loc_DOC' 'loc_NLS' 'pkgver' 'pkgrev' 'pkgdesc' 'arch' 'deps' 'options' 'groups' 'provides' 'conflicts' 'replaces')
 
 ##default buildoptions
 #BUILDOPTIONS=(-deletesrcs deletesrc deletepkg)
 #OPTIONS=(+strip)
 
-startdir="$PWD"
+# command line options
 
-srcdir="$startdir/src"
-[ -d "$srcdir" ] && rm -rf "$srcdir"
-mkdir -p "$srcdir"
+skipArchCheck=0
+skipMD5Check=0
+genMD5=0
+forceCleanup=-1 # use whatever is in options array
+runAsUser=0
+outDir="$PWD"
 
-pkgdir="$startdir/pkg"
-[ -d "$pkgdir" ] && rm -rf "$pkgdir"
-mkdir -p "$pkgdir"
+downloadOnly=0
+extractOnly=0
+buildOnly=0
+forceSplit=-1
+cleanOnly=0
 
 ### END VARIABLES ###
 
 ### MAIN CODE ###
 
-GENMD5=0
-
 while [[ $1 ]]; do
  case "$1" in
-  -g|--generate) GENMD5=1 ;;
-  -h|--help) help
-   exit 0 ;;
+  -a|--no-arch) skipArchCheck=1 ;;
+  -b) shift; buildscript="$1" ;;
+  -c|--clean-up) forceCleanup=1 ;;
+  -C|--no-clean-up) forceCleanup=0 ;;
+  -g|--generate) genMD5=1; skipMD5Check=1 ;; # also skip md5check
+  -o) shift; outDir="$1" ;;
+  --skip-md5) skipMD5Check=1 ;;
+  -u|--as-user) runAsUser=1 ;;
+  
+  -d|--download) downloadOnly=1 ;;
+  -e|--extract) extractOnly=1 ;;
+  -B|--build) buildOnly=1 ;;
+  -s|--split) forceSplit=1 ;;
+  -S|--no-split) forceSplit=0 ;;
+  -D|--only-clean) cleanOnly=1 ;;
+  
+  -h|--help) help; exit 0 ;;
+  
+  *) error 1 "Unknown argument: $1"
  esac
+ shift
 done
 
+if [ ${#pkgname[@]} -gt 1 ]; then
+ MULTIPKG=1
+else
+ MULTIPKG=0
+fi
+
+# check for buildscript
 if [ ! -f $buildscript ]; then
  error 1 "Could not find $buildscript"
 fi
 
+# check for root privileges
+if [ $runAsUser -eq 0 ]; then
+ if [ $EUID -ne 0 ]; then
+  error 1 "You do not have root privileges. Use the -u or --as-user options to run as a user"
+ fi
+else
+ if [ $EUID -eq 0 ]; then
+  warning "You shouldn't use the -u or --as-user flags while being root"
+  sleep 2
+ fi
+fi
+
+# check for being able to write to output folder
+[ ! -d "$outDir" ] && mkdir -p "$outDir";
+outDir="$(getRealPath "$outDir")" 
+if [ ! -w "$outDir" ]; then
+ error 1 "You cannot write to the output folder, '$outDir'"
+fi
+
 . "./$buildscript"
 
-if [ $GENMD5 -eq 1 ]; then
- echo "$(generatemd5)" >> $buildscript
+if [ $cleanOnly -eq 1 ]; then # if cleaning, then exiting
+ cleanup 1 # delete src and pkg folders
+ # cleanup doesn't delete _DEV, _DOC... folders or package files
+ for part in "${pkgParts[@]}"; do
+  [ -d "${pkgdir}_${part}" ] && rm -rf "${pkgdir}_${part}"
+  pkgfullname="${pkgname}_${part}-$pkgver-$pkgrev-$CARCH" # get package name (with split)
+  [ -f "$outDir/${pkgfullname}.pet" ] && rm -f "$outDir/${pkgfullname}.pet"
+ done
+ [ -f "${pkgname}-$pkgver-$pkgrev-$CARCH.pet" ] && rm -f "${pkgname}-$pkgver-$pkgrev-$CARCH.pet" # delete EXE package file
  exit 0
 fi
 
-echo "Get:"
+# check for matching arch
+if [ $skipArchCheck -eq 0 ]; then # not skipping check
+ if ! inArray "$CARCH" "${arch[@]}" && ! inArray "any" "${arch[@]}" ; then
+  error 1 "This package could not be built for your architecture, $CARCH"
+ fi
+fi
+
+[ -d "$srcdir" ] && rm -rf "$srcdir"
+mkdir -p "$srcdir"
+
+[[ -d "$pkgdir" ]] && rm -rf "$pkgdir"
+mkdir -p "$pkgdir"
+
 getSources
 
-echo "Extract:"
 extractSources
 
-export CFLAGS CXXFLAGS LDFLAGS MAKEFLAGS CHOST # export flags
+runBuild
+runCheck
 
-echo "Build:"
-build
-
-echo "Check:"
-check
-
-echo "Package:"
-package
-
-echo "Strip:"
-strip
-
-echo "Split:"
-split
-
-echo "Compress:"
-compresstopkg
-
-echo "Clean:"
-cleanup
+if [ $MULTIPKG -eq 0 ]; then
+ runSinglePackage
+else
+ runMultiPackage
+fi
 
 exit 0
 
