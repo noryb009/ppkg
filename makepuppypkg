@@ -26,7 +26,7 @@ buildscript="PUPPYPKG"
 
 # plain()
 plain() {
- echo "    $1"
+ echo "  $1"
 }
 
 # msg()
@@ -75,6 +75,34 @@ inArray() {
   shift
  done
  return 1 # didn't find it
+}
+
+# inOptionArray(needle, haystack[, haystack][, ...])
+# returns '+' if needle is found and positive, '-' if found and negative, or '_' if not found
+inOptionArray() {
+ needle="$1"
+ shift
+ while [[ $1 ]]; do
+  [[ "$needle" = "$1" || "+$needle" = "$1" ]] && echo "+" && return 0 # found it
+  [[ "-$needle" = "$1" ]] && echo "-" && return 0 # found it
+  shift
+ done
+ echo "_" # didn't find it
+}
+
+# inBuildOptions(needle) {
+inBuildOptions() {
+ local found="$(inOptionArray "$1" "${buildOptions[@]}")" # check options in makepuppypkg.conf
+ [ "$found" = "_" ] && found="$(inOptionArray "$1" "${defaultBuildOptions[@]}")" # not found, use built in options
+ echo "$found"
+}
+
+# inOptions(needle) {
+inOptions() {
+ local found="$(inOptionArray "$1" "${options[@]}")" # check options in build script
+ [ "$found" = "_" ] && found="$(inOptionArray "$1" "${confOptions[@]}")" # not found, check makepuppypkg.conf settings
+ [ "$found" = "_" ] && found="$(inOptionArray "$1" "${defaultOptions[@]}")" # not found, use built in options
+ echo "$found"
 }
 
 # splitpartused(splitpart)
@@ -155,6 +183,68 @@ checkmd5() {
  if [ "$2" != "$(getmd5 "$1")" ]; then
   error 1 "$file does not match it's checksum"
  fi
+ return 0
+}
+
+createPbuild() {
+ msg "Making pbuild..."
+ local tempSourceDir="$(mktemp -d "$startdir/pBuild.XXXXXXXXXX")"
+ mkdir "$tempSourceDir/$pkgname/"
+ 
+ # add PUPPYPKG
+ ln -s "$startdir/$buildscript" "$tempSourceDir/$pkgname/"
+ 
+ # add files
+ local file
+ for file in "${sources[@]}"; do
+  if islocal "$file"; then
+   if [ -f "$startdir/$file" ]; then
+    ln -s "$startdir/$file" "$tempSourceDir/$pkgname/"
+   else
+    rm -rf "$tempSourceDir"
+    error 1 "Could not find file '$file'"
+   fi
+  fi
+ done
+ 
+ # output
+ file="$startdir/$pkgname-$pkgver-$pkgrev.pbuild"
+ [ -f "$file" ] && rm -f "$file"
+ (
+  cd "$tempSourceDir"
+  tar czhf "$file" "$pkgname"
+ )
+ 
+ rm -rf "$tempSourceDir"
+ 
+ msg "Pbuild created"
+}
+
+compileOnePbuild() {
+ local packageName="${1##*/}"
+ packageName="${1%-*-*}"
+ msg "Compiling $packageName"
+ 
+ local compileDir="$startdir/${packageName}"
+ [ -d "$compileDir" ] && rm -rf "$compileDir"
+ mkdir "$compileDir"
+ 
+ local ret
+ local currDir="$PWD"
+ 
+ tar xzf "$1" --strip-components=1 -C "$compileDir"
+ 
+ thisScript="$(readlink -f "$0")"
+ cd "$compileDir"
+ "$thisScript" --ignore-pbuild --force-o "$outDir" "${args[@]}"
+ ret=$?
+ cd "$currDir"
+ 
+ if [ $ret -ne 0 ]; then
+  exit $ret
+ fi
+ 
+ [ $2 -eq 1 ] && rm -rf "$compileDir"
  return 0
 }
 
@@ -278,6 +368,15 @@ check() {
  return 0
 }
 
+enterFakeroot() {
+ msg "Entering fakeroot..."
+ cd "$startdir"
+ fakeroot -- "$0" --inside-fake-root "${args[@]}"
+ local ret=$?
+ msg "Exiting fakeroot"
+ return $ret
+}
+
 package() {
  msg2 "No package function found"
  return 0
@@ -291,7 +390,7 @@ runFunction() {
  local shellopts=$(shopt -p) # back up options
  export CFLAGS CXXFLAGS LDFLAGS MAKEFLAGS CHOST # export flags
  
- if type -p "$1"; then
+ if type -p "$1" > /dev/null; then
   $1 # run function
  else
   warning "Could not find function '$1' in $buildscript"
@@ -330,8 +429,10 @@ strip() {
 
 runPackageOps() {
  msg "Running package options..."
- msg2 "Shrinking binaries and libraries by removing unneeded symbols..."
- strip
+ if [ "$(inOptions strip)" = "+" ]; then
+  msg2 "Shrinking binaries and libraries by removing unneeded symbols..."
+  strip
+ fi
 }
 
 checkpkg() {
@@ -352,10 +453,13 @@ split() {
   skipSplitting=0
  elif [ $forceSplit -eq 0 ]; then # don't split from commandline
   skipSplitting=1
+ elif [ "$(inOptions split)" = "+" ]; then # check options
+  skipSplitting=0
  else
-  skipSplitting=0 # don't skip
+  skipSplitting=1
  fi
  
+ local part
  for part in "${pkgParts[@]}"; do
   [ -d "${pkgdir}_${part}" ] && rm -rf "${pkgdir}_${part}" # delete split folder
   splitpartused "$part"
@@ -368,12 +472,12 @@ split() {
  
  if [ $skipSplitting -eq 1 ]; then
   msg2 "Skipping splitting"
-  cp -r "$pkgdir" "${pkgdir}-EXE"
+  cp -r "$pkgdir" "${pkgdir}-EXE" # TODO: just move?
   return 0
  fi
  
  # back up pkgdir
- cp -r "$pkgdir" "${pkgdir}-backup"
+ cp -r "$pkgdir" "${pkgdir}-backup" # TODO: is backup needed?
  
  # split $pkgdir
  splitpkg "$(basename "$pkgdir")" "$pkgdir" &> /dev/null
@@ -386,26 +490,15 @@ split() {
  shopt -s extglob
  
  # redirect output
- if [[ "$loc_EXE" != "" && "$(ls -A "${pkgdir}_EXE")" ]]; then
-  cp -r "${pkgdir}_EXE/"* "${pkgdir}-${loc_EXE}/"
-  [ -f "$startdir/${pkgname}-pinstall.sh_EXE" ] && cat "$startdir/pinstall.sh_EXE" >> "${pkgdir}-${loc_EXE}/pinstall.sh" && chmod +x "${pkgdir}-${loc_EXE}/pinstall.sh"
-  [ -f "$startdir/${pkgname}-puninstall.sh_EXE" ] && cat "$startdir/puninstall.sh_EXE" >> "${pkgdir}-${loc_EXE}/puninstall.sh" && chmod +x "${pkgdir}-${loc_EXE}/puninstall.sh"
- fi
- if [[ "$loc_DEV" != "" && "$(ls -A "${pkgdir}_DEV")" ]]; then
-  cp -r "${pkgdir}_DEV/"* "${pkgdir}-${loc_DEV}"
-  [ -f "$startdir/${pkgname}-pinstall.sh_DEV" ] && cat "$startdir/pinstall.sh_DEV" >> "${pkgdir}-${loc_DEV}/pinstall.sh" && chmod +x "${pkgdir}-${loc_DEV}/pinstall.sh"
-  [ -f "$startdir/${pkgname}-puninstall.sh_DEV" ] && cat "$startdir/puninstall.sh_DEV" >> "${pkgdir}-${loc_DEV}/puninstall.sh" && chmod +x "${pkgdir}-${loc_DEV}/puninstall.sh"
- fi
- if [[ "$loc_DOC" != "" && "$(ls -A "${pkgdir}_DOC")" ]]; then
-  cp -r "${pkgdir}_DOC/"* "${pkgdir}-${loc_DOC}"
-  [ -f "$startdir/${pkgname}-pinstall.sh_DOC" ] && cat "$startdir/pinstall.sh_DOC" >> "${pkgdir}-${loc_DOC}/pinstall.sh" && chmod +x "${pkgdir}-${loc_DOC}/pinstall.sh"
-  [ -f "$startdir/${pkgname}-puninstall.sh_DOC" ] && cat "$startdir/puninstall.sh_DOC" >> "${pkgdir}-${loc_DOC}/puninstall.sh" && chmod +x "${pkgdir}-${loc_DOC}/puninstall.sh"
- fi
- if [[ "$loc_NLS" != "" && "$(ls -A "${pkgdir}_NLS")" ]]; then
-  cp -r "${pkgdir}_NLS/"* "${pkgdir}-${loc_NLS}"
-  [ -f "$startdir/${pkgname}-pinstall.sh_NLS" ] && cat "$startdir/pinstall.sh_NLS" >> "${pkgdir}-${loc_NLS}/pinstall.sh" && chmod +x "${pkgdir}-${loc_NLS}/pinstall.sh"
-  [ -f "$startdir/${pkgname}-puninstall.sh_NLS" ] && cat "$startdir/puninstall.sh_NLS" >> "${pkgdir}-${loc_NLS}/puninstall.sh" && chmod +x "${pkgdir}-${loc_NLS}/puninstall.sh"
- fi
+ local locArray=( "$loc_EXE"  "$loc_DEV"  "$loc_DOC"  "$loc_NLS" )
+ local i
+ for (( i=0; i<4; i++ )); do
+  if [[ "${locArray[i]}" != "" && "$(ls -A "${pkgdir}_${pkgParts[i]}")" ]]; then
+   cp -r "${pkgdir}_${pkgParts[i]}/"* "${pkgdir}-${locArray[i]}/"
+   [ -f "$startdir/${pkgname}-pinstall.sh_${pkgParts[i]}" ] && cat "$startdir/${pkgname}-pinstall.sh_${pkgParts[i]}" >> "${pkgdir}-${locArray[i]}/pinstall.sh" && chmod +x "${pkgdir}-${locArray[i]}/pinstall.sh"
+   [ -f "$startdir/${pkgname}-puninstall.sh_${pkgParts[i]}" ] && cat "$startdir/${pkgname}-puninstall.sh_${pkgParts[i]}" >> "${pkgdir}-${locArray[i]}/puninstall.sh" && chmod +x "${pkgdir}-${locArray[i]}/puninstall.sh"
+  fi
+ done
  
  shopt -u extglob
  
@@ -426,7 +519,11 @@ getpetspecs() {
   pkgdeps="${pkgdeps}+${onedep}"
  done
  
- echo "${pkgfullname}|${pkgname}${pkgsplit}|$pkgver|${pkgrev}-${CARCH}|$pkgcategory|${pkgsize}K||${pkgfullname}.pet|${pkgdeps}|${pkgdesc}|"
+ if [ "${arch[0]}" = "any" ]; then
+  echo "${pkgfullname}|${pkgname}${pkgsplit}|$pkgver|${pkgrev}-any|$pkgcategory|${pkgsize}K||${pkgfullname}.pet|${pkgdeps}|${pkgdesc}|"
+ else
+  echo "${pkgfullname}|${pkgname}${pkgsplit}|$pkgver|${pkgrev}-${CARCH}|$pkgcategory|${pkgsize}K||${pkgfullname}.pet|${pkgdeps}|${pkgdesc}|"
+ fi
 }
 
 compresstopkg() {
@@ -443,7 +540,11 @@ compresstopkg() {
    pkgsplit=""
   fi
   
-  pkgfullname="${pkgname}${pkgsplit}-$pkgver-$pkgrev-$CARCH" # get package name (with split)
+  if [ "${arch[0]}" = "any" ]; then
+   pkgfullname="${pkgname}${pkgsplit}-$pkgver-$pkgrev-any" # get package name (with split)
+  else
+   pkgfullname="${pkgname}${pkgsplit}-$pkgver-$pkgrev-$CARCH" # get package name (with split)
+  fi
   rm -f "$outDir/${pkgfullname}.pet" # delete old package
   
   if [ $skipSplitting -eq 0 ]; then # not skipping
@@ -458,7 +559,7 @@ compresstopkg() {
   # compress
   mv -f "$pkgdir-${part}" "$pkgfullname"
   echo "$(getpetspecs)" > "$pkgfullname/pet.specs"
-  tar czf "$outDir/${pkgfullname}.pet" "${pkgfullname}"
+  tar c "${pkgfullname}" | gzip --best > "$outDir/${pkgfullname}.pet"
   ret=$?
   mv -f "$pkgfullname" "$pkgdir-${part}"
   
@@ -470,20 +571,22 @@ compresstopkg() {
  done
 }
 
-# cleanup(cleanSrc)
+# cleanup(cleanSrc, doNotMessage)
 cleanup() {
- local goingToClean=0
+ local goingToClean
  if [ $forceCleanup -eq 1 ]; then # force clean from command line
   goingToClean=1
  elif [ $forceCleanup -eq 0 ]; then # force no clean from command line
   goingToClean=0
- else # default to cleaning
+ elif [ "$(inBuildOptions cleanup)" != "-" ]; then # check build options
   goingToClean=1
+ else
+  goingToClean=0
  fi
  
  [ $goingToClean -eq 0 ] && return 0 # skip cleaning
  
- msg "Cleaning up..."
+ [[ $# -eq 2 && $2 -eq 1 ]] || msg "Cleaning up..."
  local folders=( "$pkgdir" "${pkgdir}-EXE" "${pkgdir}-DEV" "${pkgdir}-DOC" "${pkgdir}-NLS" )
  [[ "$1" != "" && $1 -eq 1 ]] && folders+=( "$srcdir" )
  local folder
@@ -522,10 +625,12 @@ restorePkgVars() {
 
 runMultiPackage() {
  # back up package vars
- local _pkgname="${pkgname[@]}"
+ local _pkgname=("${pkgname[@]}")
  local _pkgdir="$pkgdir"
  
  for pkgname in "${_pkgname[@]}"; do
+  msg "Packaging $pkgname..."
+  
   pkgdir="$_pkgdir/$pkgname"
   mkdir -p "$pkgdir"
   backupPkgVars
@@ -542,7 +647,7 @@ runMultiPackage() {
  pkgname="${_pkgname[@]}"
  pkgdir="$_pkgdir"
  
- cleanup 1
+ cleanup 1 1 # clean everything, don't output message
 }
 
 help() {
@@ -558,14 +663,16 @@ Options:
   -g, --generate | generate md5 sums of the source files
       --skip-md5 | skip source md5sum checks
   -o <path>      | save package files to <path>
+  -p, --pbuild <file>, <file>, ... | compile pbuild files
+      --pbuild-noclean <file>, <file>, ... | compile pbuild files, don't cleanup
+  -P, --make-pbuild| compress '$buildscript' and local source files to a pbuild file
   -u, --as-user  | run as user
   
   -d, --download | download sources, then exit
   -e, --extract  | download and extract sources, then exit
   -B, --build    | build package, then exit
-  -s, --split    | split into EXE, DEV, DOC and NLS
-  -S, --no-split | don't split into EXE, DEV, DOC and NLS
-  -D, --only-clean| clean up built packages and build files, then exit
+  -s, --split    | split package into EXE, DEV, DOC and NLS
+  -S, --no-split | don't split package into EXE, DEV, DOC and NLS
   
   -h, --help     | display this help
 HERE_EOF
@@ -575,6 +682,8 @@ HERE_EOF
 
 ### VARIABLES ###
 #default flags
+args=("$@") # backup arguments for fakeroot
+
 MAKEFLAGS="-j$(($(grep -c ^processor /proc/cpuinfo)+1))"
 LDFLAGS="-Wl,-O1,--sort-common,--as-needed,-z,relro,--hash-style=gnu"
 CARCH="$(uname -m)"
@@ -599,6 +708,7 @@ loc_NLS='NLS'
 startdir="$PWD"
 srcdir="$startdir/src"
 pkgdir="$startdir/pkg"
+outDir="$startdir"
 
 # error catching
 trap 'safeExit "Received TERM signal, exiting..."' TERM
@@ -611,7 +721,6 @@ trap 'safeExit "Aborted by user, exiting..."' INT
 foundConf=0
 [ -f /etc/makepuppypkg.conf ] && . /etc/makepuppypkg.conf && foundConf=1
 [ -f ~/.makepuppypkg.conf ] && . ~/.makepuppypkg.conf && foundConf=1
-[ -f makepuppypkg.conf ] && . ./makepuppypkg.conf && foundConf=1
 
 if [ $foundConf -eq 0 ]; then # didn't find makepuppypkg.conf
  error 1 "Could not find makepuppypkg.conf"
@@ -623,6 +732,8 @@ fi
 
 pkgParts=('EXE' 'DEV' 'DOC' 'NLS')
 multipkgBackupVars=('loc_EXE' 'loc_DEV' 'loc_DOC' 'loc_NLS' 'pkgver' 'pkgrev' 'pkgdesc' 'arch' 'deps' 'options' 'groups' 'provides' 'conflicts' 'replaces')
+defaultBuildOptions=(+cleanup +fakeroot)
+defaultOptions=(+strip +split)
 
 ##default buildoptions
 #BUILDOPTIONS=(-deletesrcs deletesrc deletepkg)
@@ -630,18 +741,21 @@ multipkgBackupVars=('loc_EXE' 'loc_DEV' 'loc_DOC' 'loc_NLS' 'pkgver' 'pkgrev' 'p
 
 # command line options
 
+compilePbuild=0
+ignoreCompilePbuild=0
 skipArchCheck=0
 skipMD5Check=0
 genMD5=0
 forceCleanup=-1 # use whatever is in options array
 runAsUser=0
-outDir="$PWD"
+inFakeRoot=0
+makePbuild=0
+forceOut=0
 
 downloadOnly=0
 extractOnly=0
 buildOnly=0
 forceSplit=-1
-cleanOnly=0
 
 ### END VARIABLES ###
 
@@ -654,7 +768,10 @@ while [[ $1 ]]; do
   -c|--clean-up) forceCleanup=1 ;;
   -C|--no-clean-up) forceCleanup=0 ;;
   -g|--generate) genMD5=1; skipMD5Check=1 ;; # also skip md5check
-  -o) shift; outDir="$1" ;;
+  -o) shift; [ $forceOut -eq 0 ] && outDir="$1" ;;
+  -p|--pbuild) if [ $ignoreCompilePbuild -eq 0 ]; then compilePbuild=1; shift; fi; break ;;
+  --pbuild-noclean) if [ $ignoreCompilePbuild -eq 0 ]; then compilePbuild=2; shift; fi; break ;;
+  -P|--make-pbuild) makePbuild=1 ;;
   --skip-md5) skipMD5Check=1 ;;
   -u|--as-user) runAsUser=1 ;;
   
@@ -663,7 +780,10 @@ while [[ $1 ]]; do
   -B|--build) buildOnly=1 ;;
   -s|--split) forceSplit=1 ;;
   -S|--no-split) forceSplit=0 ;;
-  -D|--only-clean) cleanOnly=1 ;;
+  
+  --ignore-pbuild) ignoreCompilePbuild=1 ;;
+  --inside-fake-root) inFakeRoot=1 ;;
+  --force-o) forceOut=1; shift; outDir="$1" ;;
   
   -h|--help) help; exit 0 ;;
   
@@ -672,24 +792,20 @@ while [[ $1 ]]; do
  shift
 done
 
-if [ ${#pkgname[@]} -gt 1 ]; then
- MULTIPKG=1
-else
- MULTIPKG=0
-fi
-
-# check for buildscript
-if [ ! -f $buildscript ]; then
- error 1 "Could not find $buildscript"
+# check for needed programs
+if [ "$(inBuildOptions fakeroot)" = "+" ]; then
+ if ! type -p fakeroot > /dev/null; then
+  error 1 "You do not have 'fakeroot'. Please install it or disable it in makepuppypkg.conf"
+ fi
 fi
 
 # check for root privileges
 if [ $runAsUser -eq 0 ]; then
- if [ $EUID -ne 0 ]; then
-  error 1 "You do not have root privileges. Use the -u or --as-user options to run as a user"
+ if [[ $EUID -ne 0 && "$(inBuildOptions fakeroot)" = "-" ]]; then
+  error 1 "You do not have root privileges. Use the -u or --as-user options to run as a user, or enable 'fakeroot' in makepuppypkg.conf"
  fi
 else
- if [ $EUID -eq 0 ]; then
+ if [[ $inFakeRoot -eq 0 && $EUID -eq 0 ]]; then
   warning "You shouldn't use the -u or --as-user flags while being root"
   sleep 2
  fi
@@ -697,22 +813,31 @@ fi
 
 # check for being able to write to output folder
 [ ! -d "$outDir" ] && mkdir -p "$outDir";
-outDir="$(getRealPath "$outDir")" 
+outDir="$(getRealPath "$outDir")"
 if [ ! -w "$outDir" ]; then
  error 1 "You cannot write to the output folder, '$outDir'"
 fi
 
+# if compiling pbuilds
+if [ $compilePbuild -ne 0 ]; then
+ while [[ $1 ]]; do
+  compileOnePbuild "$1" "$compilePbuild"
+  shift
+ done
+ msg "All pBuilds have been compiled"
+ exit 0
+fi
+
+# check for buildscript
+if [ ! -f $buildscript ]; then
+ error 1 "Could not find $buildscript"
+fi
+
 . "./$buildscript"
 
-if [ $cleanOnly -eq 1 ]; then # if cleaning, then exiting
- cleanup 1 # delete src and pkg folders
- # cleanup doesn't delete _DEV, _DOC... folders or package files
- for part in "${pkgParts[@]}"; do
-  [ -d "${pkgdir}_${part}" ] && rm -rf "${pkgdir}_${part}"
-  pkgfullname="${pkgname}_${part}-$pkgver-$pkgrev-$CARCH" # get package name (with split)
-  [ -f "$outDir/${pkgfullname}.pet" ] && rm -f "$outDir/${pkgfullname}.pet"
- done
- [ -f "${pkgname}-$pkgver-$pkgrev-$CARCH.pet" ] && rm -f "${pkgname}-$pkgver-$pkgrev-$CARCH.pet" # delete EXE package file
+# check if making build tarball
+if [ $makePbuild -eq 1 ]; then
+ createPbuild
  exit 0
 fi
 
@@ -723,19 +848,31 @@ if [ $skipArchCheck -eq 0 ]; then # not skipping check
  fi
 fi
 
-[ -d "$srcdir" ] && rm -rf "$srcdir"
-mkdir -p "$srcdir"
+if [ ${#pkgname[@]} -gt 1 ]; then
+ MULTIPKG=1
+else
+ MULTIPKG=0
+fi
+
+if [ $inFakeRoot -eq 0 ]; then
+ [ -d "$srcdir" ] && rm -rf "$srcdir"
+ mkdir -p "$srcdir"
+ 
+ getSources
+ 
+ extractSources
+ 
+ runBuild
+ runCheck
+ 
+ if [ $EUID -ne 0 && "$(inBuildOptions fakeroot)" = "+" ]; then # not root, using fakeroot
+  enterFakeroot
+  exit $?
+ fi
+fi
 
 [[ -d "$pkgdir" ]] && rm -rf "$pkgdir"
 mkdir -p "$pkgdir"
-
-getSources
-
-extractSources
-
-runBuild
-runCheck
-
 if [ $MULTIPKG -eq 0 ]; then
  runSinglePackage
 else

@@ -8,7 +8,7 @@ arch=()
 url=""
 deps=()
 makedeps=()
-buildoptions=()
+options=()
 
 sources=()
 md5sums=()
