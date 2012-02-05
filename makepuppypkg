@@ -144,6 +144,8 @@ getabslocalfilename() {
  local file="$(getlocalfilename "$1")"
  if [ -f "$startdir/$file" ]; then
   echo "$startdir/$file"
+ elif [ -f "$srcdest/$file" ]; then
+  echo "$srcdest/$file"
  elif [ -f "$srcdir/$file" ]; then
   echo "$srcdir/$file"
  else
@@ -192,14 +194,18 @@ createPbuild() {
  mkdir "$tempSourceDir/$pkgname/"
  
  # add PUPPYPKG
- ln -s "$startdir/$buildscript" "$tempSourceDir/$pkgname/"
+ msg2 "Adding $buildscript..."
+ ln -s "$startdir/$buildFile" "$tempSourceDir/$pkgname/$buildscript"
  
  # add files
  local file
  for file in "${sources[@]}"; do
   if islocal "$file"; then
-   if [ -f "$startdir/$file" ]; then
-    ln -s "$startdir/$file" "$tempSourceDir/$pkgname/"
+   
+   if getabslocalfilename "$file" > /dev/null; then
+    msg2 "Adding ${file}..."
+    file="$(getabslocalfilename "$file")"
+    ln -s "$file" "$tempSourceDir/$pkgname/"
    else
     rm -rf "$tempSourceDir"
     error 1 "Could not find file '$file'"
@@ -208,7 +214,7 @@ createPbuild() {
  done
  
  # output
- file="$startdir/$pkgname-$pkgver-$pkgrev.pbuild"
+ file="$startdir/$pkgname-$pkgver-$pkgrev.pbuild.tar.gz"
  [ -f "$file" ] && rm -f "$file"
  (
   cd "$tempSourceDir"
@@ -244,13 +250,14 @@ compileOnePbuild() {
   exit $ret
  fi
  
- [ $2 -eq 1 ] && rm -rf "$compileDir"
+ [ $2 -eq 2 ] && rm -rf "$compileDir"
  return 0
 }
 
 getSources() {
  msg "Getting sources..."
- cd "$startdir"
+ 
+ cd "$srcdest"
  local file
  local fileNumber=-1
  local localname
@@ -269,7 +276,7 @@ getSources() {
    if islocal "$file"; then # local 
     error 1 "Could not find $file"
    else # remote
-    localname="$(getlocalfilename "$file")"
+    localname="$srcdest/$(getlocalfilename "$file")"
     connectType="$(getremotetype "$file")"
     
     case "$connectType" in
@@ -282,7 +289,7 @@ getSources() {
      ftp)
       wget -c --passive-ftp -t 3 --waitretry=3 -O "${localname}.part" "$file"
       ret=$? ;;
-     *) error 1 "Could not download $file: unknown protocol"
+     *) error 1 "Could not download $file: unknown protocol" ;;
     esac
     if [ $ret -ne 0 ]; then
      error 1 "Could not download $file"
@@ -295,8 +302,8 @@ getSources() {
  done
  
  if [ $genMD5 -eq 1 ]; then # if generating MD5 sums
-  msg "Appending source MD5 sums to $buildscript..."
-  echo "$(generateMD5)" >> $buildscript
+  msg "Appending source MD5 sums to $buildFile..."
+  echo "$(generateMD5)" >> "$buildFile"
   exit 0
  fi
  
@@ -314,40 +321,31 @@ extractSources() {
  local extractcmd
  local localname
  for file in "${sources[$@]}"; do
+  localname="$(getlocalfilename "$file")"
+  
+  if ! getabslocalfilename "$localname" > /dev/null; then
+   error 1 "Could not find $localname"
+  fi
+  
+  if [[ ! -e "$srcdir/$localname" ]]; then
+   ln -s "$(getabslocalfilename "$localname")" "$srcdir"
+  fi
   # check if in noextract array
   if inArray "$file" "${noextract[@]}"; then
    continue # skip
   fi
   
-  localname="$(getlocalfilename "$file")"
-  #[ ! -e "$srcdir/$localname" ]
-  if [[ ! -e "$srcdir/$localname" && -f "$startdir/$localname" ]]; then
-   cd "$startdir"
-   ln -s "$localname" "$srcdir"
-   cd "$srcdir"
-  fi
-  
-  if [[ ! -f "$localname" && ! -L "$localname" ]]; then
-   error 1 "Could not find $localname"
-  fi
-  
+  local decompress
   case "$file" in
-   *tar)
-    tar xf "$localname" &> /dev/null
-    ret=$? ;;
-   *tar.gz)
-    tar xzf "$localname" &> /dev/null
-    ret=$? ;;
-   *tar.bz2)
-    tar xjf "$localname" &> /dev/null
-    ret=$? ;;
-   *tar.xz)
-    tar xJf "$localname" &> /dev/null
-    ret=$? ;;
+   *tar) decompress="" ;;
+   *tar.gz) decompress="z" ;;
+   *tar.bz2) decompress="j" ;;
+   *tar.xz) decompress="J" ;;
    *) continue
   esac
   
-  if [ $ret -ne 0 ]; then
+  tar x${decompress}f "$localname" &> /dev/null
+  if [ $? -ne 0 ]; then
    error 1 "Error extracting $localname"
   fi
  done
@@ -382,6 +380,43 @@ package() {
  return 0
 }
 
+# mvSplit(fromSplit, toSplit, file[, file][, file] [...])
+# function to use in afterSplit() to fix split file locations
+mvSplit() {
+ if [ $# -lt 3 ]; then
+  error 1 "Error in $buildscript->afterSplit(): mvSplit() needs at least one file to move"
+ fi
+ 
+ local from="$1"
+ shift
+ local to="$1"
+ shift
+ 
+ [[ "$from" = "EXE" || "$from" = "DEV" || "$from" = "DOC" || "$from" = "NLS" ]] || error 1 "Error in $buildscript->afterSplit(): invalid 'from' location, received '$from'"
+ [[ "$to" = "EXE" || "$to" = "DEV" || "$to" = "DOC" || "$to" = "NLS" ]] || error 1 "Error in $buildscript->afterSplit(): invalid 'to' location, received '$to'"
+ 
+ local fromLoc="$(eval echo '$'loc_$from)"
+ local toLoc="$(eval echo '$'loc_$to)"
+ 
+ [ $fromLoc = $toLoc ] && return 0 # don't move if in same place
+ 
+ while [[ $1 ]]; do
+  file="${1#/}" # remove / from start
+  shift
+  if [ ! -e "${pkgdir}-${fromLoc}/$file" ]; then
+   warning "'${pkgdir}-${fromLoc}/$file' does not exist, cannot be moved by mvSplit()"
+   continue
+  fi
+  [ ! -d "${pkgdir}-${toLoc}/$(dirname "$file")" ] && mkdir -p "${pkgdir}-${toLoc}/$(dirname "$file")"
+  mv -f "${pkgdir}-${fromLoc}/$file" "${pkgdir}-${toLoc}/$file"
+ done
+}
+
+afterSplit() {
+ msg2 "No afterSplit function found"
+ return 0
+}
+
 # runFunction(functionName)
 # run a function
 runFunction() {
@@ -393,7 +428,7 @@ runFunction() {
  if type -p "$1" > /dev/null; then
   $1 # run function
  else
-  warning "Could not find function '$1' in $buildscript"
+  warning "Could not find function '$1' in $buildFile"
  fi
  
  eval "$shellopts" # restore options
@@ -420,6 +455,16 @@ runPackage() {
   runFunction "package"
  else
   runFunction "package_$1"
+ fi
+}
+
+runAfterSplit() {
+ [ $skipSplitting = 1 ] && return 0
+ msg "Fixing split..."
+ if [ $MULTIPKG -eq 0 ]; then # not multi package
+  runFunction "afterSplit"
+ else
+  runFunction "afterSplit_$1"
  fi
 }
 
@@ -462,8 +507,6 @@ split() {
  local part
  for part in "${pkgParts[@]}"; do
   [ -d "${pkgdir}_${part}" ] && rm -rf "${pkgdir}_${part}" # delete split folder
-  splitpartused "$part"
-  [ $? = 1 ] && continue
   [ -d "$pkgdir-$part" ] && rm -rf "$pkgdir-$part"
   [ $skipSplitting -eq 1 ] && continue
   mkdir -p "${pkgdir}-${part}"
@@ -508,15 +551,30 @@ split() {
 # getpetspecs()
 getpetspecs() {
  local pkgsize="$(du -s -k "$pkgdir/" | cut -f 1)"
- pkgsize="${pkgsize}"
  
  local pkgdeps
+ if splitpartused "EXE" && [[ "$pkgsplit" != "" && "$(ls -A "$pkgdir-EXE")" ]]; then # DOC, DEV or NLS needs EXE package if it exists
+  pkgdeps="+$pkgname"
+ fi
+ 
  local onedep
+ local onedeppkg
  local onedepname
  for onedep in "${deps[@]}"; do
-  #if [ "${onedep}"
+  if [[ "$onedep" =~ (EXE|DOC|DEV|NLS):* ]]; then # package split specified
+   onedeppkg="${onedep%%:*}"
+   onedepname="${onedep#*:}"
+  else # default to EXE
+   onedeppkg="EXE"
+   onedepname="$onedep"
+  fi
+  
+  [ "$(eval echo '$'loc_$onedeppkg)" != "$part" ] && continue # not in this package
+  
+  [ "$(echo "$pkgdeps" | egrep "(^|,)\+${onedepname}(<|=|>|,|$)")" != "" ] && continue # already in deps
+  
   [ "$pkgdeps" != "" ] && pkgdeps="${pkgdeps},"
-  pkgdeps="${pkgdeps}+${onedep}"
+  pkgdeps="${pkgdeps}+${onedepname}"
  done
  
  if [ "${arch[0]}" = "any" ]; then
@@ -540,7 +598,7 @@ compresstopkg() {
    pkgsplit=""
   fi
   
-  if [ "${arch[0]}" = "any" ]; then
+  if inArray "any" "${arch[@]}"; then
    pkgfullname="${pkgname}${pkgsplit}-$pkgver-$pkgrev-any" # get package name (with split)
   else
    pkgfullname="${pkgname}${pkgsplit}-$pkgver-$pkgrev-$CARCH" # get package name (with split)
@@ -557,6 +615,7 @@ compresstopkg() {
   fi
   
   # compress
+  [ -e "$pkgfullname" ] && rm -rf "$pkgfullname"
   mv -f "$pkgdir-${part}" "$pkgfullname"
   echo "$(getpetspecs)" > "$pkgfullname/pet.specs"
   tar c "${pkgfullname}" | gzip --best > "$outDir/${pkgfullname}.pet"
@@ -586,7 +645,7 @@ cleanup() {
  
  [ $goingToClean -eq 0 ] && return 0 # skip cleaning
  
- [[ $# -eq 2 && $2 -eq 1 ]] || msg "Cleaning up..."
+ [[ $# -gt 1 && $2 -eq 1 ]] || msg "Cleaning up..."
  local folders=( "$pkgdir" "${pkgdir}-EXE" "${pkgdir}-DEV" "${pkgdir}-DOC" "${pkgdir}-NLS" )
  [[ "$1" != "" && $1 -eq 1 ]] && folders+=( "$srcdir" )
  local folder
@@ -600,6 +659,7 @@ runSinglePackage() {
  runPackage
  runPackageOps
  split
+ runAfterSplit
  checkpkg
  compresstopkg
  cleanup 1
@@ -638,6 +698,7 @@ runMultiPackage() {
   runPackage "$pkgname"
   runPackageOps
   split
+  runAfterSplit
   checkpkg
   compresstopkg
   cleanup 0
@@ -664,7 +725,9 @@ Options:
       --skip-md5 | skip source md5sum checks
   -o <path>      | save package files to <path>
   -p, --pbuild <file>, <file>, ... | compile pbuild files
-      --pbuild-noclean <file>, <file>, ... | compile pbuild files, don't cleanup
+      --pbuild-clean <file>, ... | compile pbuild files, then cleanup (warning: 
+                                   deletes sources if srcdir is not set in
+                                   makepuppypkg.conf)
   -P, --make-pbuild| compress '$buildscript' and local source files to a pbuild file
   -u, --as-user  | run as user
   
@@ -706,6 +769,7 @@ loc_DOC='DOC'
 loc_NLS='NLS'
 
 startdir="$PWD"
+srcdest="$startdir"
 srcdir="$startdir/src"
 pkgdir="$startdir/pkg"
 outDir="$startdir"
@@ -741,6 +805,7 @@ defaultOptions=(+strip +split)
 
 # command line options
 
+buildFile="$buildscript"
 compilePbuild=0
 ignoreCompilePbuild=0
 skipArchCheck=0
@@ -764,13 +829,13 @@ forceSplit=-1
 while [[ $1 ]]; do
  case "$1" in
   -a|--no-arch) skipArchCheck=1 ;;
-  -b) shift; buildscript="$1" ;;
+  -b) shift; buildFile="$1" ;;
   -c|--clean-up) forceCleanup=1 ;;
   -C|--no-clean-up) forceCleanup=0 ;;
   -g|--generate) genMD5=1; skipMD5Check=1 ;; # also skip md5check
   -o) shift; [ $forceOut -eq 0 ] && outDir="$1" ;;
   -p|--pbuild) if [ $ignoreCompilePbuild -eq 0 ]; then compilePbuild=1; shift; fi; break ;;
-  --pbuild-noclean) if [ $ignoreCompilePbuild -eq 0 ]; then compilePbuild=2; shift; fi; break ;;
+  --pbuild-clean) if [ $ignoreCompilePbuild -eq 0 ]; then compilePbuild=2; shift; fi; break ;;
   -P|--make-pbuild) makePbuild=1 ;;
   --skip-md5) skipMD5Check=1 ;;
   -u|--as-user) runAsUser=1 ;;
@@ -811,12 +876,14 @@ else
  fi
 fi
 
-# check for being able to write to output folder
+# check for being able to write to folders
+[ ! -d "$srcdest" ] && mkdir -p "$srcdest"
+srcdest="$(getRealPath "$srcdest")"
+[ ! -w "$srcdest" ] && error 1 "You cannot write to the source storage folder, '$srcdest'"
+
 [ ! -d "$outDir" ] && mkdir -p "$outDir";
 outDir="$(getRealPath "$outDir")"
-if [ ! -w "$outDir" ]; then
- error 1 "You cannot write to the output folder, '$outDir'"
-fi
+[ ! -w "$outDir" ] && error 1 "You cannot write to the package output folder, '$outDir'"
 
 # if compiling pbuilds
 if [ $compilePbuild -ne 0 ]; then
@@ -829,11 +896,11 @@ if [ $compilePbuild -ne 0 ]; then
 fi
 
 # check for buildscript
-if [ ! -f $buildscript ]; then
- error 1 "Could not find $buildscript"
+if [ ! -f "$buildFile" ]; then
+ error 1 "Could not find '$buildFile'"
 fi
 
-. "./$buildscript"
+. "./$buildFile"
 
 # check if making build tarball
 if [ $makePbuild -eq 1 ]; then
@@ -865,7 +932,7 @@ if [ $inFakeRoot -eq 0 ]; then
  runBuild
  runCheck
  
- if [ $EUID -ne 0 && "$(inBuildOptions fakeroot)" = "+" ]; then # not root, using fakeroot
+ if [[ $EUID -ne 0 && "$(inBuildOptions fakeroot)" = "+" ]]; then # not root, using fakeroot
   enterFakeroot
   exit $?
  fi
