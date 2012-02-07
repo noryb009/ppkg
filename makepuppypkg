@@ -218,7 +218,7 @@ createPbuild() {
  [ -f "$file" ] && rm -f "$file"
  (
   cd "$tempSourceDir"
-  tar czhf "$file" "$pkgname"
+  tar czhf "$file" --group=root --owner=root "$pkgname"
  )
  
  rm -rf "$tempSourceDir"
