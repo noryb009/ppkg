@@ -1,24 +1,10 @@
 #!/bin/bash -e
 #
-# Reads a PUPPYPKG file and creates a PET package
-# 
-# There should be one or more files in a build folder:
-# bash/
-#   - PUPPYPKG
-#   - pinstall.sh
+# Reads a PUPPYPKG file and creates a PET/SFS package
 # 
 # this script will read the PUPPYPKG, download any required files,
 # extract them, build the program, then package it
 # 
-# At the end of this script, the build directory should look like:
-# bash/
-#   - PUPPYPKG
-#   - pinstall.sh
-#   - src/
-#     - *source files*
-#   - pkg/
-#     - *compiled files*
-#   - bash-4.0-1-i686.pet
 
 buildscript="PUPPYPKG"
 
@@ -240,15 +226,16 @@ compileOnePbuild() {
  
  tar xzf "$1" --strip-components=1 -C "$compileDir"
  
- thisScript="$(readlink -f "$0")"
+ thisScript="$(readlink -f "$0")" # if user started script with path specified (/usr/bin/makepuppypkg), use it
+ if [ ! -e "$thisScript" ]; then # no path
+  if ! which "$0" &> /dev/null; then
+   error 1 "Could not find location of 'makepuppypkg'"
+  fi
+  thisScript="$(which "$0")"
+ fi
  cd "$compileDir"
  "$thisScript" --ignore-pbuild --force-o "$outDir" "${args[@]}"
- ret=$?
  cd "$currDir"
- 
- if [ $ret -ne 0 ]; then
-  exit $ret
- fi
  
  [ $2 -eq 2 ] && rm -rf "$compileDir"
  return 0
@@ -548,8 +535,9 @@ split() {
  rm -rf "${pkgdir}_"{EXE,DEV,DOC,NLS}
 }
 
-# getpetspecs()
-getpetspecs() {
+# getPETpetspecs()
+# get the pet.specs entry for a PET package
+getPETpetspecs() {
  local pkgsize="$(du -s -k "$pkgdir/" | cut -f 1)"
  
  local pkgdeps
@@ -603,7 +591,10 @@ compresstopkg() {
   else
    pkgfullname="${pkgname}${pkgsplit}-$pkgver-$pkgrev-$CARCH" # get package name (with split)
   fi
-  rm -f "$outDir/${pkgfullname}.pet" # delete old package
+  
+  # delete old packages
+  [ $makePetPkg -eq 1 ] && rm -f "$outDir/${pkgfullname}.pet" 
+  [ $makeSfsPkg -eq 1 ] && rm -f "$outDir/${pkgfullname}.sfs"
   
   if [ $skipSplitting -eq 0 ]; then # not skipping
    if ! splitpartused "$part"; then # find if package part not used
@@ -615,18 +606,26 @@ compresstopkg() {
   fi
   
   # compress
-  [ -e "$pkgfullname" ] && rm -rf "$pkgfullname"
-  mv -f "$pkgdir-${part}" "$pkgfullname"
-  echo "$(getpetspecs)" > "$pkgfullname/pet.specs"
-  tar c "${pkgfullname}" | gzip --best > "$outDir/${pkgfullname}.pet"
-  ret=$?
-  mv -f "$pkgfullname" "$pkgdir-${part}"
-  
-  if [ $ret -ne 0 ]; then
-   error 1 "Could not compress the package"
+  if [ $makePetPkg -eq 1 ]; then # PET package
+   msg2 "Creating PET package(s)..."
+   [ -e "$pkgfullname" ] && rm -rf "$pkgfullname"
+   mv -f "$pkgdir-${part}" "$pkgfullname"
+   echo "$(getPETpetspecs)" > "$pkgfullname/pet.specs"
+   tar c "${pkgfullname}" | gzip --best > "$outDir/${pkgfullname}.pet"
+   ret=$?
+   rm -rf "$pkgfullname/pet.specs"
+   mv -f "$pkgfullname" "$pkgdir-${part}"
+   
+   if [ $ret -ne 0 ]; then
+    error 1 "Could not compress the PET package"
+   fi
+   echo -n "$(getmd5 "$outDir/${pkgfullname}.pet")" >> "$outDir/${pkgfullname}.pet"
   fi
   
-  echo -n "$(getmd5 "$outDir/${pkgfullname}.pet")" >> "$outDir/${pkgfullname}.pet"
+  if [ $makeSfsPkg -eq 1 ]; then # SFS package
+   msg2 "Creating SFS package(s)..."
+   mksquashfs "$pkgdir-${part}" "$outDir/${pkgfullname}.sfs" $sfsOptions # note: $sfsOptions should not have quotes
+  fi
  done
 }
 
@@ -717,6 +716,9 @@ makepuppypkg [options]
 Compiles a program into a package using '$buildscript'
 
 Options:
+      --pet      | create a PET package
+      --sfs      | create an SFS package
+  
   -a, --no-arch  | don't check if your architecture is in arch()
   -b <file>      | use <file> instead of '$buildscript' to create the package
   -c, --clean-up | clean up build files and folders
@@ -726,8 +728,7 @@ Options:
   -o <path>      | save package files to <path>
   -p, --pbuild <file>, <file>, ... | compile pbuild files
       --pbuild-clean <file>, ... | compile pbuild files, then cleanup (warning: 
-                                   deletes sources if srcdir is not set in
-                                   makepuppypkg.conf)
+                   deletes sources if srcdir is not set in makepuppypkg.conf)
   -P, --make-pbuild| compress '$buildscript' and local source files to a pbuild file
   -u, --as-user  | run as user
   
@@ -805,6 +806,9 @@ defaultOptions=(+strip +split)
 
 # command line options
 
+makePetPkg=0
+makeSfsPkg=0
+
 buildFile="$buildscript"
 compilePbuild=0
 ignoreCompilePbuild=0
@@ -828,6 +832,9 @@ forceSplit=-1
 
 while [[ $1 ]]; do
  case "$1" in
+  --pet) makePetPkg=1 ;;
+  --sfs) makeSfsPkg=1 ;;
+  
   -a|--no-arch) skipArchCheck=1 ;;
   -b) shift; buildFile="$1" ;;
   -c|--clean-up) forceCleanup=1 ;;
@@ -864,6 +871,12 @@ if [ "$(inBuildOptions fakeroot)" = "+" ]; then
  fi
 fi
 
+if [ $makeSfsPkg -eq 1 ]; then
+ if ! type -p mksquashfs > /dev/null; then
+  error 1 "You do not have 'mksquashfs'. Please install it or don't use the '--sfs' flag"
+ fi
+fi
+
 # check for root privileges
 if [ $runAsUser -eq 0 ]; then
  if [[ $EUID -ne 0 && "$(inBuildOptions fakeroot)" = "-" ]]; then
@@ -874,6 +887,11 @@ else
   warning "You shouldn't use the -u or --as-user flags while being root"
   sleep 2
  fi
+fi
+
+# check if building any packages
+if [[ $makePetPkg -eq 0 && $makeSfsPkg -eq 0 && $downloadOnly -eq 0 && $extractOnly -eq 0 && $buildOnly -eq 0 ]]; then
+ error 1 "You are not creating any packages. Please use the --pet and/or --sfs options on the command line"
 fi
 
 # check for being able to write to folders
