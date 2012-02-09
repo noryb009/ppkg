@@ -166,9 +166,12 @@ generateMD5() {
 }
 
 # checkmd5(file, md5sum)
+# file is the path to the file
+# md5sum is the number in the md5sum array to check the md5sum with
 checkmd5() {
  [ $skipMD5Check -eq 1 ] && return 0 # skip MD5 check command line option
- if [ "$2" != "$(getmd5 "$1")" ]; then
+ [ $2 -gt ${#md5sums[@]} ] && return 1 # spot in array doesn't exist
+ if [ "${md5sums[$2]}" != "$(getmd5 "$1")" ]; then
   error 1 "$file does not match it's checksum"
  fi
  return 0
@@ -251,14 +254,10 @@ getSources() {
  local connectType
  local ret
  
- for file in "${sources[$@]}"; do
-  ((fileNumber++)) # next file number
+ for file in "${sources[@]}"; do
+  fileNumber=$((fileNumber+1)) # next file number
   if localname="$(getabslocalfilename "$file")"; then # local or already downloaded
-   # link file
-   if [ ! -f "$srcdir/$(getlocalfilename "$file")" ]; then
-    ln -s "$localname" "$srcdir"
-   fi
-   checkmd5 "$localname" "${md5sums[$fileNumber]}" # check md5 sum
+   checkmd5 "$localname" $fileNumber # check md5 sum
   else # file doesn't exist
    if islocal "$file"; then # local 
     error 1 "Could not find $file"
@@ -281,9 +280,8 @@ getSources() {
     if [ $ret -ne 0 ]; then
      error 1 "Could not download $file"
     fi
-    checkmd5 "${localname}.part" "${md5sums[$fileNumber]}" # check md5 sum
+    checkmd5 "${localname}.part" $fileNumber # check md5 sum
     mv "${localname}.part" "$localname"
-    ln -s "$localname" "$srcdir"
    fi
   fi
  done
@@ -307,7 +305,7 @@ extractSources() {
  local ret
  local extractcmd
  local localname
- for file in "${sources[$@]}"; do
+ for file in "${sources[@]}"; do
   localname="$(getlocalfilename "$file")"
   
   if ! getabslocalfilename "$localname" > /dev/null; then
@@ -890,7 +888,7 @@ else
 fi
 
 # check if building any packages
-if [[ $makePetPkg -eq 0 && $makeSfsPkg -eq 0 && $downloadOnly -eq 0 && $extractOnly -eq 0 && $buildOnly -eq 0 ]]; then
+if [[ $makePetPkg -eq 0 && $makeSfsPkg -eq 0 && $downloadOnly -eq 0 && $extractOnly -eq 0 && $buildOnly -eq 0 && $genMD5 -eq 0 ]]; then
  error 1 "You are not creating any packages. Please use the --pet and/or --sfs options on the command line"
 fi
 
