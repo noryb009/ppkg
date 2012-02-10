@@ -563,6 +563,9 @@ getPETpetspecs() {
   pkgdeps="${pkgdeps}+${onedepname}"
  done
  
+ # replace < with &lt, > with &gt, etc.
+ pkgdeps="$(echo "$pkgdeps" | sed -e 's/<=/\&le/g' -e 's/>=/\&ge/g' -e 's/</\&lt/g' -e 's/>/\&gt/g' -e 's/=/\&eq/g')"
+ 
  if [ "${arch[0]}" = "any" ]; then
   echo "${pkgfullname}|${pkgname}${pkgsplit}|$pkgver|${pkgrev}-any|$pkgcategory|${pkgsize}K||${pkgfullname}.pet|${pkgdeps}|${pkgdesc}|"
  else
