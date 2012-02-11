@@ -12,8 +12,8 @@ buildscript="PUPPYPKG"
 
 LANGBASE="/usr/share/locale"
 #LANGBASE="./locale"
-LANGPATH="$LANGBASE/${LANG%_*}/makepuppypkg"
-[ -f "$LANGPATH" ] && . "$LANGPATH" || . "$LANGBASE/en/makepuppypkg"
+LANGPATH="$LANGBASE/${LANG%_*}/ppkg"
+[ -f "$LANGPATH" ] && . "$LANGPATH" || . "$LANGBASE/en/ppkg"
 
 ### END LOCALE ###
 
@@ -89,7 +89,7 @@ inOptionArray() {
 
 # inBuildOptions(needle) {
 inBuildOptions() {
- local found="$(inOptionArray "$1" "${buildOptions[@]}")" # check options in makepuppypkg.conf
+ local found="$(inOptionArray "$1" "${buildOptions[@]}")" # check options in ppkg.conf
  [ "$found" = "_" ] && found="$(inOptionArray "$1" "${defaultBuildOptions[@]}")" # not found, use built in options
  echo "$found"
 }
@@ -97,7 +97,7 @@ inBuildOptions() {
 # inOptions(needle) {
 inOptions() {
  local found="$(inOptionArray "$1" "${options[@]}")" # check options in build script
- [ "$found" = "_" ] && found="$(inOptionArray "$1" "${confOptions[@]}")" # not found, check makepuppypkg.conf settings
+ [ "$found" = "_" ] && found="$(inOptionArray "$1" "${confOptions[@]}")" # not found, check ppkg.conf settings
  [ "$found" = "_" ] && found="$(inOptionArray "$1" "${defaultOptions[@]}")" # not found, use built in options
  echo "$found"
 }
@@ -240,10 +240,10 @@ compileOnePbuild() {
  
  tar xzf "$1" --strip-components=1 -C "$compileDir"
  
- thisScript="$(readlink -f "$0")" # if user started script with path specified (/usr/bin/makepuppypkg), use it
+ thisScript="$(readlink -f "$0")" # if user started script with path specified (/usr/bin/ppkg), use it
  if [ ! -e "$thisScript" ]; then # no path
   if ! which "$0" &> /dev/null; then
-   error 1 "${l_not_find_file}" "makepuppypkg"
+   error 1 "${l_not_find_file}" "ppkg"
   fi
   thisScript="$(which "$0")"
  fi
@@ -731,7 +731,7 @@ runMultiPackage() {
 
 help() {
  cat << HERE_EOF
-makepuppypkg [options]
+ppkg [options]
 Compiles a program into a package using '$buildscript'
 
 Options:
@@ -748,7 +748,7 @@ Options:
   -o <path>      | save package files to <path>
   -p, --pbuild <file>, <file>, ... | compile pbuild files
       --pbuild-clean <file>, ... | compile pbuild files, then cleanup (warning: 
-                   deletes sources if srcdir is not set in makepuppypkg.conf)
+                   deletes sources if srcdir is not set in ppkg.conf)
   -P, --make-pbuild| compress '$buildscript' and local source files to a pbuild file
   -u, --as-user  | run as user
   
@@ -802,18 +802,18 @@ trap "safeExit \"${l_received_signal}\" 'QUIT'" QUIT
 trap "safeExit \"${l_unknown_error}\"" ERR
 trap "safeExit \"${l_aborted_by_user}\"" INT
 
-# include makepuppypkg.conf
+# include ppkg.conf
 foundConf=0
-[ -f /etc/makepuppypkg.conf ] && . /etc/makepuppypkg.conf && foundConf=1
-[ -f ~/.makepuppypkg.conf ] && . ~/.makepuppypkg.conf && foundConf=1
+[ -f /etc/ppkg.conf ] && . /etc/ppkg.conf && foundConf=1
+[ -f ~/.ppkg.conf ] && . ~/.ppkg.conf && foundConf=1
 
-if [ $foundConf -eq 0 ]; then # didn't find makepuppypkg.conf
- error 1 "${l_not_find_file}" "makepuppypkg.conf"
+if [ $foundConf -eq 0 ]; then # didn't find ppkg.conf
+ error 1 "${l_not_find_file}" "ppkg.conf"
 fi
 
 # need CARCH and CHOST
-[[ "$CARCH" = "" ]] && error 1 "${l_not_find_var}" "CARCH" "makepuppypkg.conf"
-[[ "$CHOST" = "" ]] && error 1 "${l_not_find_var}" "CHOST" "makepuppypkg.conf"
+[[ "$CARCH" = "" ]] && error 1 "${l_not_find_var}" "CARCH" "ppkg.conf"
+[[ "$CHOST" = "" ]] && error 1 "${l_not_find_var}" "CHOST" "ppkg.conf"
 
 pkgParts=('EXE' 'DEV' 'DOC' 'NLS')
 multipkgBackupVars=('loc_EXE' 'loc_DEV' 'loc_DOC' 'loc_NLS' 'pkgver' 'pkgrev' 'pkgdesc' 'arch' 'deps' 'options' 'groups' 'provides' 'conflicts' 'replaces')
@@ -884,7 +884,7 @@ done
 # check for needed programs
 if [ "$(inBuildOptions fakeroot)" = "+" ]; then
  if ! type -p fakeroot > /dev/null; then
-  error 1  "${l_not_have_install}" "fakeroot" "makepuppypkg.conf"
+  error 1  "${l_not_have_install}" "fakeroot" "ppkg.conf"
  fi
 fi
 
@@ -897,7 +897,7 @@ fi
 # check for root privileges
 if [ $runAsUser -eq 0 ]; then
  if [[ $EUID -ne 0 && "$(inBuildOptions fakeroot)" = "-" ]]; then
-  error 1 "${l_not_root}" "makepuppypkg.conf"
+  error 1 "${l_not_root}" "ppkg.conf"
  fi
 else
  if [[ $inFakeRoot -eq 0 && $EUID -eq 0 ]]; then
