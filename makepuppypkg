@@ -1,6 +1,6 @@
 #!/bin/bash -e
 #
-# Reads a PUPPYPKG file and creates a PET/SFS package
+# Reads a PUPPYPKG file and creates a puppy package
 # 
 # this script will read the PUPPYPKG, download any required files,
 # extract them, build the program, then package it
@@ -907,7 +907,7 @@ else
 fi
 
 # check if building any packages
-if [[ $makePetPkg -eq 0 && $makeSfsPkg -eq 0 && $makeRxzPkg -eq 0 && $downloadOnly -eq 0 && $extractOnly -eq 0 && $buildOnly -eq 0 && $genMD5 -eq 0 ]]; then
+if ! (( makePetPkg || makeSfsPkg || makeRxzPkg || downloadOnly || extractOnly || buildOnly || genMD5 || makePbuild )); then
  error 1 "${l_not_creating_any_packages}" "--pet, --sfs, --rxz"
 fi
 
