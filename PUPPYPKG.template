@@ -5,6 +5,7 @@ pkgdesc=""
 pkgcategory=BuildingBlock
 
 arch=()
+notarch=()
 url=""
 deps=()
 makedeps=()

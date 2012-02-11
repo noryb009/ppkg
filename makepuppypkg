@@ -521,7 +521,7 @@ split() {
  
  mv -f "${pkgdir}-backup" "$pkgdir"
  
- shopt -s extglob
+ shopt -s dotglob
  
  # redirect output
  local locArray=( "$loc_EXE"  "$loc_DEV"  "$loc_DOC"  "$loc_NLS" )
@@ -534,7 +534,7 @@ split() {
   fi
  done
  
- shopt -u extglob
+ shopt -u dotglob
  
  rm -rf "${pkgdir}_"{EXE,DEV,DOC,NLS}
 }
@@ -585,6 +585,8 @@ compresstopkg() {
  local file
  local ret
  
+ shopt -s dotglob
+ 
  local part
  for part in "${pkgParts[@]}"; do
   if [ "$part" != "EXE" ]; then
@@ -600,8 +602,9 @@ compresstopkg() {
   fi
   
   # delete old packages
-  [ $makePetPkg -eq 1 ] && rm -f "$outDir/${pkgfullname}.pet" 
+  [ $makePetPkg -eq 1 ] && rm -f "$outDir/${pkgfullname}.pet"
   [ $makeSfsPkg -eq 1 ] && rm -f "$outDir/${pkgfullname}.sfs"
+  [ $makeRxzPkg -eq 1 ] && rm -f "$outDir/${pkgfullname}.rxz"
   
   if [ $skipSplitting -eq 0 ]; then # not skipping
    if ! splitpartused "$part"; then # find if package part not used
@@ -633,7 +636,16 @@ compresstopkg() {
    msg2 "${l_creating_pkg}" "SFS"
    mksquashfs "$pkgdir-${part}" "$outDir/${pkgfullname}.sfs" $sfsOptions # note: $sfsOptions should not have quotes
   fi
+  
+  if [ $makeRxzPkg -eq 1 ]; then # RXZ package
+   msg2 "${l_creating_pkg}" "RXZ"
+   (
+    cd "$pkgdir-${part}"
+    tar -c * | xz --best > "$outDir/${pkgfullname}.rxz"
+   )
+  fi
  done
+ shopt -u dotglob
 }
 
 # cleanup(cleanSrc, doNotMessage)
@@ -725,6 +737,7 @@ Compiles a program into a package using '$buildscript'
 Options:
       --pet      | create a PET package
       --sfs      | create an SFS package
+      --rxz      | create an RXZ (hpm) package
   
   -a, --no-arch  | don't check if your architecture is in arch()
   -b <file>      | use <file> instead of '$buildscript' to create the package
@@ -810,6 +823,7 @@ defaultOptions=(+strip +split)
 # command line options
 makePetPkg=0
 makeSfsPkg=0
+makeRxzPkg=0
 
 buildFile="$buildscript"
 compilePbuild=0
@@ -836,6 +850,7 @@ while [[ $1 ]]; do
  case "$1" in
   --pet) makePetPkg=1 ;;
   --sfs) makeSfsPkg=1 ;;
+  --rxz) makeRxzPkg=1 ;;
   
   -a|--no-arch) skipArchCheck=1 ;;
   -b) shift; buildFile="$1" ;;
@@ -892,8 +907,8 @@ else
 fi
 
 # check if building any packages
-if [[ $makePetPkg -eq 0 && $makeSfsPkg -eq 0 && $downloadOnly -eq 0 && $extractOnly -eq 0 && $buildOnly -eq 0 && $genMD5 -eq 0 ]]; then
- error 1 "${l_not_creating_any_packages}" "--pet, --sfs"
+if [[ $makePetPkg -eq 0 && $makeSfsPkg -eq 0 && $makeRxzPkg -eq 0 && $downloadOnly -eq 0 && $extractOnly -eq 0 && $buildOnly -eq 0 && $genMD5 -eq 0 ]]; then
+ error 1 "${l_not_creating_any_packages}" "--pet, --sfs, --rxz"
 fi
 
 # check for being able to write to folders
@@ -930,7 +945,20 @@ fi
 
 # check for matching arch
 if [ $skipArchCheck -eq 0 ]; then # not skipping check
- if ! inArray "$CARCH" "${arch[@]}" && ! inArray "any" "${arch[@]}" ; then
+ if [ ${#arch[@]} -eq 0 ] || [[ ${#arch[@]} -eq 1 && "${arch[0]}" = "" ]]; then # arch not defined, using notarch
+  if inArray "$CARCH" "${notarch[@]}"; then
+   archSupported=0
+  else
+   archSupported=1
+  fi
+ elif inArray "any" "${arch[@]}"; then # any defined (script)
+  archSupported=1
+ elif inArray "$CARCH" "${arch[@]}"; then # arch supported
+  archSupported=1
+ else # arch not supported
+  archSupported=0
+ fi
+ if [ $archSupported -eq 0 ]; then
   error 1 "${l_not_for_arch}" "$CARCH"
  fi
 fi
