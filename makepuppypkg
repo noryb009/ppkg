@@ -8,46 +8,57 @@
 
 buildscript="PUPPYPKG"
 
+### LOCALE ###
+
+LANGBASE="/usr/share/locale"
+#LANGBASE="./locale"
+LANGPATH="$LANGBASE/${LANG%_*}/makepuppypkg"
+[ -f "$LANGPATH" ] && . "$LANGPATH" || . "$LANGBASE/en/makepuppypkg"
+
+### END LOCALE ###
+
 ### FUNCTIONS ###
 
 # plain()
 plain() {
- echo "  $1"
+ local mesg="$1"; shift
+ printf "  $mesg\n" "$@"
 }
 
 # msg()
 msg() {
- echo "=> $1"
+ local mesg="$1"; shift
+ printf "=> $mesg\n" "$@"
 }
 
 # msg2()
 msg2() {
- echo "  -> $1"
+ local mesg="$1"; shift
+ printf "  -> $mesg\n" "$@"
 }
 
 # warning(message)
 # prints an error, but doesn't exit
 warning() {
- echo "Warning: $1"
+ local mesg="$1"; shift
+ printf "${l_warning}: $mesg\n" "$@"
 }
 
 # error(errorcode, message)
 # prints an error
 error() {
- if [ $# -eq 2 ]; then
-  echo "Error: $2"
-  exit $1
- else
-  echo "Error: $1"
-  exit 1
- fi
+ local errorCode=$1; shift
+ local mesg="$1"; shift
+ 
+ printf "${l_error}: $mesg\n" "$@"
+ exit ${errorCode:-0}
 }
 
 safeExit() {
  if [ "$#" -ne 0 ]; then
   error 1 "$@"
  else
-  error 1 "Unknown error"
+  error 1 "${l_unknown_error}"
  fi
 }
 
@@ -158,11 +169,11 @@ generateMD5() {
   if localname="$(getabslocalfilename "$file")"; then # local or already downloaded
    output="$output '$(getmd5 "$localname")'"
   else
-   error 1 "Could not find $(getlocalfilename "$file")"
+   error 1 "${l_not_find_file}" "$(getlocalfilename "$file")"
   fi
  done
  output="$output )"
- echo "$output"
+ echo "$output" >> "$buildFile"
 }
 
 # checkmd5(file, md5sum)
@@ -172,18 +183,18 @@ checkmd5() {
  [ $skipMD5Check -eq 1 ] && return 0 # skip MD5 check command line option
  [ $2 -gt ${#md5sums[@]} ] && return 1 # spot in array doesn't exist
  if [ "${md5sums[$2]}" != "$(getmd5 "$1")" ]; then
-  error 1 "$file does not match it's checksum"
+  error 1 "${l_checksum_fail}" "$file"
  fi
  return 0
 }
 
 createPbuild() {
- msg "Making pbuild..."
+ msg "${l_make_pbuild}"
  local tempSourceDir="$(mktemp -d "$startdir/pBuild.XXXXXXXXXX")"
  mkdir "$tempSourceDir/$pkgname/"
  
  # add PUPPYPKG
- msg2 "Adding $buildscript..."
+ msg2 "${l_adding}" "$buildscript"
  ln -s "$startdir/$buildFile" "$tempSourceDir/$pkgname/$buildscript"
  
  # add files
@@ -192,12 +203,12 @@ createPbuild() {
   if islocal "$file"; then
    
    if getabslocalfilename "$file" > /dev/null; then
-    msg2 "Adding ${file}..."
+    msg2 "${l_adding}" "$file"
     file="$(getabslocalfilename "$file")"
     ln -s "$file" "$tempSourceDir/$pkgname/"
    else
     rm -rf "$tempSourceDir"
-    error 1 "Could not find file '$file'"
+    error 1 "${l_not_find_file}" "$file"
    fi
   fi
  done
@@ -212,13 +223,13 @@ createPbuild() {
  
  rm -rf "$tempSourceDir"
  
- msg "Pbuild created"
+ msg "${l_pbuild_created}"
 }
 
 compileOnePbuild() {
  local packageName="${1##*/}"
  packageName="${1%-*-*}"
- msg "Compiling $packageName"
+ msg "${l_compiling}" "$packageName"
  
  local compileDir="$startdir/${packageName}"
  [ -d "$compileDir" ] && rm -rf "$compileDir"
@@ -232,7 +243,7 @@ compileOnePbuild() {
  thisScript="$(readlink -f "$0")" # if user started script with path specified (/usr/bin/makepuppypkg), use it
  if [ ! -e "$thisScript" ]; then # no path
   if ! which "$0" &> /dev/null; then
-   error 1 "Could not find location of 'makepuppypkg'"
+   error 1 "${l_not_find_file}" "makepuppypkg"
   fi
   thisScript="$(which "$0")"
  fi
@@ -245,7 +256,7 @@ compileOnePbuild() {
 }
 
 getSources() {
- msg "Getting sources..."
+ msg "${l_getting_sources}"
  
  cd "$srcdest"
  local file
@@ -260,7 +271,7 @@ getSources() {
    checkmd5 "$localname" $fileNumber # check md5 sum
   else # file doesn't exist
    if islocal "$file"; then # local 
-    error 1 "Could not find $file"
+    error 1 "${l_not_find_file}" "$file"
    else # remote
     localname="$srcdest/$(getlocalfilename "$file")"
     connectType="$(getremotetype "$file")"
@@ -278,7 +289,7 @@ getSources() {
      *) error 1 "Could not download $file: unknown protocol" ;;
     esac
     if [ $ret -ne 0 ]; then
-     error 1 "Could not download $file"
+     error 1 "${l_not_download_file}" "$file"
     fi
     checkmd5 "${localname}.part" $fileNumber # check md5 sum
     mv "${localname}.part" "$localname"
@@ -287,19 +298,19 @@ getSources() {
  done
  
  if [ $genMD5 -eq 1 ]; then # if generating MD5 sums
-  msg "Appending source MD5 sums to $buildFile..."
-  echo "$(generateMD5)" >> "$buildFile"
+  msg "${l_appending_md5}" "$buildFile"
+  generateMD5
   exit 0
  fi
  
  if [ $downloadOnly -eq 1 ]; then
-  msg "Sources have been downloaded"
+  msg "${l_done_downloading_sources}"
   exit 0
  fi
 }
 
 extractSources() {
- msg "Extracting sources..."
+ msg "${l_extracting_sources}"
  cd "$srcdir"
  local file
  local ret
@@ -309,7 +320,7 @@ extractSources() {
   localname="$(getlocalfilename "$file")"
   
   if ! getabslocalfilename "$localname" > /dev/null; then
-   error 1 "Could not find $localname"
+   error 1 "${l_not_find_file}" "$localname"
   fi
   
   if [[ ! -e "$srcdir/$localname" ]]; then
@@ -331,37 +342,34 @@ extractSources() {
   
   tar x${decompress}f "$localname" &> /dev/null
   if [ $? -ne 0 ]; then
-   error 1 "Error extracting $localname"
+   error 1 "${l_error_extracting}" "$localname"
   fi
  done
  
  if [ $extractOnly -eq 1 ]; then
-  msg "Sources have been downloaded and extracted"
+  msg "${l_downloaded_and_extracted}"
   exit 0
  fi
 }
 
 build() {
- msg2 "No build function found"
  return 0
 }
 
 check() {
- msg2 "No check function found"
  return 0
 }
 
 enterFakeroot() {
- msg "Entering fakeroot..."
+ msg "${l_enter_fakeroot}"
  cd "$startdir"
  fakeroot -- "$0" --inside-fake-root "${args[@]}"
  local ret=$?
- msg "Exiting fakeroot"
+ msg "${l_exit_fakeroot}"
  return $ret
 }
 
 package() {
- msg2 "No package function found"
  return 0
 }
 
@@ -369,7 +377,7 @@ package() {
 # function to use in afterSplit() to fix split file locations
 mvSplit() {
  if [ $# -lt 3 ]; then
-  error 1 "Error in $buildscript->afterSplit(): mvSplit() needs at least one file to move"
+  error 1 "${l_mvsplit_argc}" "$buildscript"
  fi
  
  local from="$1"
@@ -377,8 +385,8 @@ mvSplit() {
  local to="$1"
  shift
  
- [[ "$from" = "EXE" || "$from" = "DEV" || "$from" = "DOC" || "$from" = "NLS" ]] || error 1 "Error in $buildscript->afterSplit(): invalid 'from' location, received '$from'"
- [[ "$to" = "EXE" || "$to" = "DEV" || "$to" = "DOC" || "$to" = "NLS" ]] || error 1 "Error in $buildscript->afterSplit(): invalid 'to' location, received '$to'"
+ [[ "$from" = "EXE" || "$from" = "DEV" || "$from" = "DOC" || "$from" = "NLS" ]] || error 1 "${l_mvsplit_from}" "$buildscript" "$from"
+ [[ "$to" = "EXE" || "$to" = "DEV" || "$to" = "DOC" || "$to" = "NLS" ]] || error 1 "${l_mvsplit_to}" "$buildscript" "$to"
  
  local fromLoc="$(eval echo '$'loc_$from)"
  local toLoc="$(eval echo '$'loc_$to)"
@@ -389,7 +397,7 @@ mvSplit() {
   file="${1#/}" # remove / from start
   shift
   if [ ! -e "${pkgdir}-${fromLoc}/$file" ]; then
-   warning "'${pkgdir}-${fromLoc}/$file' does not exist, cannot be moved by mvSplit()"
+   warning "${l_mvsplit_not_exist}" "${pkgdir}-${fromLoc}/$file"
    continue
   fi
   [ ! -d "${pkgdir}-${toLoc}/$(dirname "$file")" ] && mkdir -p "${pkgdir}-${toLoc}/$(dirname "$file")"
@@ -398,7 +406,6 @@ mvSplit() {
 }
 
 afterSplit() {
- msg2 "No afterSplit function found"
  return 0
 }
 
@@ -413,29 +420,29 @@ runFunction() {
  if type -p "$1" > /dev/null; then
   $1 # run function
  else
-  warning "Could not find function '$1' in $buildFile"
+  warning "${l_not_find_function}" "$1" "$buildFile"
  fi
  
  eval "$shellopts" # restore options
 }
 
 runBuild() {
- msg "Building..."
+ msg "${l_building}"
  runFunction "build"
  
  if [ $buildOnly -eq 1 ]; then
-  msg "The package has been built"
+  msg "${l_package_built}"
   exit 0
  fi
 }
 
 runCheck() {
- msg "Checking..."
+ msg "${l_checking}"
  runFunction "check"
 }
 
 runPackage() {
- msg "Packaging..."
+ msg "${l_packaging}"
  if [ $MULTIPKG -eq 0 ]; then # not multi package
   runFunction "package"
  else
@@ -445,7 +452,7 @@ runPackage() {
 
 runAfterSplit() {
  [ $skipSplitting = 1 ] && return 0
- msg "Fixing split..."
+ msg "${l_fixing_split}"
  if [ $MULTIPKG -eq 0 ]; then # not multi package
   runFunction "afterSplit"
  else
@@ -458,26 +465,25 @@ strip() {
 }
 
 runPackageOps() {
- msg "Running package options..."
+ msg "${l_running_pkg_options}"
  if [ "$(inOptions strip)" = "+" ]; then
-  msg2 "Shrinking binaries and libraries by removing unneeded symbols..."
+  msg2 "${l_shrinking}"
   strip
  fi
 }
 
 checkpkg() {
- msg "Checking package..."
  # from arch's makepkg
  if find "${pkgdir}" -type f -print0 | xargs -0  grep -q -m 1 -I "${srcdir}" ; then
-  warning "Package contains reference(s) to $srcdir"
+  warning "${l_contains_reference}" "$srcdir"
  fi
  if find "${pkgdir}" -type f -print0 | xargs -0  grep -q -m 1 -I "${pkgdir}" ; then
-  warning "Package contains reference(s) to $pkgdir"
+  warning "${l_contains_reference}" "$pkgdir"
  fi
 }
 
 split() {
- msg "Spliting package..."
+ msg "${l_splitting}"
  
  if [ $forceSplit -eq 1 ]; then # split from commandline
   skipSplitting=0
@@ -499,7 +505,7 @@ split() {
  done
  
  if [ $skipSplitting -eq 1 ]; then
-  msg2 "Skipping splitting"
+  msg2 "${l_skip_splitting}"
   cp -r "$pkgdir" "${pkgdir}-EXE" # TODO: just move?
   return 0
  fi
@@ -574,7 +580,7 @@ getPETpetspecs() {
 }
 
 compresstopkg() {
- msg "Compressing package(s)..."
+ msg "${l_compressing}"
  cd "$startdir"
  local file
  local ret
@@ -608,7 +614,7 @@ compresstopkg() {
   
   # compress
   if [ $makePetPkg -eq 1 ]; then # PET package
-   msg2 "Creating PET package(s)..."
+   msg2 "${l_creating_pkg}" "PET"
    [ -e "$pkgfullname" ] && rm -rf "$pkgfullname"
    mv -f "$pkgdir-${part}" "$pkgfullname"
    echo "$(getPETpetspecs)" > "$pkgfullname/pet.specs"
@@ -624,7 +630,7 @@ compresstopkg() {
   fi
   
   if [ $makeSfsPkg -eq 1 ]; then # SFS package
-   msg2 "Creating SFS package(s)..."
+   msg2 "${l_creating_pkg}" "SFS"
    mksquashfs "$pkgdir-${part}" "$outDir/${pkgfullname}.sfs" $sfsOptions # note: $sfsOptions should not have quotes
   fi
  done
@@ -645,7 +651,7 @@ cleanup() {
  
  [ $goingToClean -eq 0 ] && return 0 # skip cleaning
  
- [[ $# -gt 1 && $2 -eq 1 ]] || msg "Cleaning up..."
+ [[ $# -gt 1 && $2 -eq 1 ]] || msg "${l_cleaning}"
  local folders=( "$pkgdir" "${pkgdir}-EXE" "${pkgdir}-DEV" "${pkgdir}-DOC" "${pkgdir}-NLS" )
  [[ "$1" != "" && $1 -eq 1 ]] && folders+=( "$srcdir" )
  local folder
@@ -689,7 +695,7 @@ runMultiPackage() {
  local _pkgdir="$pkgdir"
  
  for pkgname in "${_pkgname[@]}"; do
-  msg "Packaging $pkgname..."
+  msg "${l_packaging_pkg}" "$pkgname"
   
   pkgdir="$_pkgdir/$pkgname"
   mkdir -p "$pkgdir"
@@ -777,11 +783,11 @@ pkgdir="$startdir/pkg"
 outDir="$startdir"
 
 # error catching
-trap 'safeExit "Received TERM signal, exiting..."' TERM
-trap 'safeExit "Received HUP signal, exiting..."' HUP
-trap 'safeExit "Received QUIT signal, exiting..."' QUIT
-trap 'safeExit "Received unknown error, exiting..."' ERR
-trap 'safeExit "Aborted by user, exiting..."' INT
+trap "safeExit \"${l_received_signal}\" 'TERM'" TERM
+trap "safeExit \"${l_received_signal}\" 'HUP'" HUP
+trap "safeExit \"${l_received_signal}\" 'QUIT'" QUIT
+trap "safeExit \"${l_unknown_error}\"" ERR
+trap "safeExit \"${l_aborted_by_user}\"" INT
 
 # include makepuppypkg.conf
 foundConf=0
@@ -789,24 +795,19 @@ foundConf=0
 [ -f ~/.makepuppypkg.conf ] && . ~/.makepuppypkg.conf && foundConf=1
 
 if [ $foundConf -eq 0 ]; then # didn't find makepuppypkg.conf
- error 1 "Could not find makepuppypkg.conf"
+ error 1 "${l_not_find_file}" "makepuppypkg.conf"
 fi
 
 # need CARCH and CHOST
-[[ "$CARCH" = "" ]] && echo "Could not find CARCH. Please define it in makepuppypkg.conf"
-[[ "$CHOST" = "" ]] && echo "Could not find CHOST. Please define it in makepuppypkg.conf"
+[[ "$CARCH" = "" ]] && error 1 "${l_not_find_var}" "CARCH" "makepuppypkg.conf"
+[[ "$CHOST" = "" ]] && error 1 "${l_not_find_var}" "CHOST" "makepuppypkg.conf"
 
 pkgParts=('EXE' 'DEV' 'DOC' 'NLS')
 multipkgBackupVars=('loc_EXE' 'loc_DEV' 'loc_DOC' 'loc_NLS' 'pkgver' 'pkgrev' 'pkgdesc' 'arch' 'deps' 'options' 'groups' 'provides' 'conflicts' 'replaces')
 defaultBuildOptions=(+cleanup +fakeroot)
 defaultOptions=(+strip +split)
 
-##default buildoptions
-#BUILDOPTIONS=(-deletesrcs deletesrc deletepkg)
-#OPTIONS=(+strip)
-
 # command line options
-
 makePetPkg=0
 makeSfsPkg=0
 
@@ -860,7 +861,7 @@ while [[ $1 ]]; do
   
   -h|--help) help; exit 0 ;;
   
-  *) error 1 "Unknown argument: $1"
+  *) error 1 "${l_unknown_argument}" "$1"
  esac
  shift
 done
@@ -868,41 +869,41 @@ done
 # check for needed programs
 if [ "$(inBuildOptions fakeroot)" = "+" ]; then
  if ! type -p fakeroot > /dev/null; then
-  error 1 "You do not have 'fakeroot'. Please install it or disable it in makepuppypkg.conf"
+  error 1  "${l_not_have_install}" "fakeroot" "makepuppypkg.conf"
  fi
 fi
 
 if [ $makeSfsPkg -eq 1 ]; then
  if ! type -p mksquashfs > /dev/null; then
-  error 1 "You do not have 'mksquashfs'. Please install it or don't use the '--sfs' flag"
+  error 1 "${l_not_have_dont_use_flag}" "mksquashfs" "--sfs"
  fi
 fi
 
 # check for root privileges
 if [ $runAsUser -eq 0 ]; then
  if [[ $EUID -ne 0 && "$(inBuildOptions fakeroot)" = "-" ]]; then
-  error 1 "You do not have root privileges. Use the -u or --as-user options to run as a user, or enable 'fakeroot' in makepuppypkg.conf"
+  error 1 "${l_not_root}" "makepuppypkg.conf"
  fi
 else
  if [[ $inFakeRoot -eq 0 && $EUID -eq 0 ]]; then
-  warning "You shouldn't use the -u or --as-user flags while being root"
+  warning "${l_u_flag_as_root}"
   sleep 2
  fi
 fi
 
 # check if building any packages
 if [[ $makePetPkg -eq 0 && $makeSfsPkg -eq 0 && $downloadOnly -eq 0 && $extractOnly -eq 0 && $buildOnly -eq 0 && $genMD5 -eq 0 ]]; then
- error 1 "You are not creating any packages. Please use the --pet and/or --sfs options on the command line"
+ error 1 "${l_not_creating_any_packages}" "--pet, --sfs"
 fi
 
 # check for being able to write to folders
 [ ! -d "$srcdest" ] && mkdir -p "$srcdest"
 srcdest="$(getRealPath "$srcdest")"
-[ ! -w "$srcdest" ] && error 1 "You cannot write to the source storage folder, '$srcdest'"
+[ ! -w "$srcdest" ] && error 1 "${l_no_write_source_cache}" "$srcdest"
 
 [ ! -d "$outDir" ] && mkdir -p "$outDir";
 outDir="$(getRealPath "$outDir")"
-[ ! -w "$outDir" ] && error 1 "You cannot write to the package output folder, '$outDir'"
+[ ! -w "$outDir" ] && error 1 "${l_no_write_pkg_out}" "$outDir"
 
 # if compiling pbuilds
 if [ $compilePbuild -ne 0 ]; then
@@ -910,13 +911,13 @@ if [ $compilePbuild -ne 0 ]; then
   compileOnePbuild "$1" "$compilePbuild"
   shift
  done
- msg "All pBuilds have been compiled"
+ msg "${l_done_all_pbuilds}"
  exit 0
 fi
 
 # check for buildscript
 if [ ! -f "$buildFile" ]; then
- error 1 "Could not find '$buildFile'"
+ error 1 "${l_not_find_file}" "$buildFile"
 fi
 
 . "./$buildFile"
@@ -930,7 +931,7 @@ fi
 # check for matching arch
 if [ $skipArchCheck -eq 0 ]; then # not skipping check
  if ! inArray "$CARCH" "${arch[@]}" && ! inArray "any" "${arch[@]}" ; then
-  error 1 "This package could not be built for your architecture, $CARCH"
+  error 1 "${l_not_for_arch}" "$CARCH"
  fi
 fi
 
