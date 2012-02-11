@@ -1,15 +1,21 @@
-pkgname=
-pkgver=
-pkgrev=
+pkgname=""
+pkgver=""
+pkgrev=""
 pkgdesc=""
-pkgcategory=BuildingBlock
+pkgcategory="BuildingBlock"
 
 arch=()
 notarch=()
 url=""
 deps=()
 makedeps=()
+checkdeps=()
+
 options=()
+loc_EXE='EXE'
+loc_DEV='DEV'
+loc_DOC='DOC'
+loc_NLS='NLS'
 
 sources=()
 md5sums=()
