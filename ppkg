@@ -539,6 +539,24 @@ split() {
  rm -rf "${pkgdir}_"{EXE,DEV,DOC,NLS}
 }
 
+# signPkg(pkgFile)
+# pkgFile is the path to the package file to sign
+signPkg() {
+ [ $forceSign -ne 1 ] && return 0
+ [ ! -f "$1" ] && error 1 "${l_not_find_file}" "$1"
+ 
+ msg2 "${l_signing}"
+ 
+ local args=""
+ [ "$gpgKey" != "" ] && local args="-u $gpgKey"
+ 
+ gpg -b --use-agent $args "$1" &> /dev/null
+ 
+ if [ $? -ne 0 ]; then
+  error 1 "${l_error_signing}" "$1"
+ fi
+}
+
 # getPETpetspecs()
 # get the pet.specs entry for a PET package
 getPETpetspecs() {
@@ -744,12 +762,15 @@ Options:
   -c, --clean-up | clean up build files and folders
   -C, --no-clean-up| don't clean up build files and folders
   -g, --generate | generate md5 sums of the source files
-      --skip-md5 | skip source md5sum checks
+      --sign     | sign packages
+  -k <key>, --key <key>| sign package with the GPG key <key>
+  -K, --no-sign  | don't sign output packages
   -o <path>      | save package files to <path>
   -p, --pbuild <file>, <file>, ... | compile pbuild files
       --pbuild-clean <file>, ... | compile pbuild files, then cleanup (warning: 
                    deletes sources if srcdir is not set in ppkg.conf)
   -P, --make-pbuild| compress '$buildscript' and local source files to a pbuild file
+      --skip-md5 | skip source md5sum checks
   -u, --as-user  | run as user
   
   -d, --download | download sources, then exit
@@ -788,6 +809,9 @@ loc_EXE='EXE'
 loc_DEV='DEV'
 loc_DOC='DOC'
 loc_NLS='NLS'
+
+packager=""
+gpgKey=""
 
 startdir="$PWD"
 srcdest="$startdir"
@@ -841,6 +865,7 @@ downloadOnly=0
 extractOnly=0
 buildOnly=0
 forceSplit=-1
+forceSign=-1
 
 ### END VARIABLES ###
 
@@ -857,6 +882,9 @@ while [[ $1 ]]; do
   -c|--clean-up) forceCleanup=1 ;;
   -C|--no-clean-up) forceCleanup=0 ;;
   -g|--generate) genMD5=1; skipMD5Check=1 ;; # also skip md5check
+  --sign) forceSign=1 ;;
+  -k|--key) forceSign=1; shift; gpgKey="$1" ;;
+  -K|--no-sign) forceSign=0 ;;
   -o) shift; [ $forceOut -eq 0 ] && outDir="$1" ;;
   -p|--pbuild) if [ $ignoreCompilePbuild -eq 0 ]; then compilePbuild=1; shift; fi; break ;;
   --pbuild-clean) if [ $ignoreCompilePbuild -eq 0 ]; then compilePbuild=2; shift; fi; break ;;
@@ -892,6 +920,23 @@ if [ $makeSfsPkg -eq 1 ]; then
  if ! type -p mksquashfs > /dev/null; then
   error 1 "${l_not_have_dont_use_flag}" "mksquashfs" "--sfs"
  fi
+fi
+
+if [[ "$(inBuildOptions sign)" = "+" || $forceSign -eq 1 ]] && [ $forceSign -ne 0 ]; then
+ if ! type -p gpg > /dev/null; then
+  error 1  "${l_not_have_install}" "gpg" "ppkg.conf"
+ fi
+ if [ "$gpgKey" = "" ]; then
+  if ! gpg --list-key &>/dev/null; then
+   error 1 "${l_no_keys}"
+  fi
+ elif ! gpg --list-key "$gpgKey" &>/dev/null; then
+  error 1 "${l_key_not_exist}" "$gpgKey"
+ fi
+ 
+ forceSign=1 # save that we are going to sign
+else
+ forceSign=0 # save that we are not going to sign
 fi
 
 # check for root privileges

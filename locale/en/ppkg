@@ -49,3 +49,7 @@ l_no_write_source_cache="You cannot write to the source storage folder, '%s'" # 
 l_no_write_pkg_out="You cannot write to the package output folder, '%s'" # %s(package output folder)
 l_done_all_pbuilds="All pBuilds have been compiled"
 l_not_for_arch="This package could not be built for your architecture, %s" # %s(arch)
+l_signing="Signing package..."
+l_no_keys="You do not have any keys in your GPG keyring."
+l_key_not_exist="The key %s doesn't exist in your GPG keyring." # %s(key)
+l_error_signing="Error signing '%s', exiting..." # %s(file)
