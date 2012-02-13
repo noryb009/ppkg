@@ -53,7 +53,7 @@ msg2() {
 # prints an error, but doesn't exit
 warning() {
  local mesg="$1"; shift
- printf "${l_warning}: $mesg\n" "$@"
+ printf "${l_warning}: $mesg\n" "$@" 1>&2
 }
 
 # error(errorcode, message)
@@ -62,8 +62,8 @@ error() {
  local errorCode=$1; shift
  local mesg="$1"; shift
  
- printf "${l_error}: $mesg\n" "$@"
- exit ${errorCode:-0}
+ printf "${l_error}: $mesg\n" "$@" 1>&2
+ exit ${errorCode}
 }
 
 safeExit() {
@@ -243,14 +243,21 @@ compileOnePbuild() {
  packageName="${1%-*-*}"
  msg "${l_compiling}" "$packageName"
  
- local compileDir="$startdir/${packageName}"
- [ -d "$compileDir" ] && rm -rf "$compileDir"
- mkdir "$compileDir"
- 
- local ret
- local currDir="$PWD"
- 
- tar xzf "$1" --strip-components=1 -C "$compileDir"
+ local compileDir
+ local toDeleteFolder=0
+ if [ -f "$1" ]; then
+  compileDir="$startdir/${packageName}"
+  [ -d "$compileDir" ] && rm -rf "$compileDir"
+  mkdir "$compileDir"
+  
+  tar xzf "$1" --strip-components=1 -C "$compileDir"
+  
+  [ $2 -eq 2 ] && toDeleteFolder=1
+ elif [ -d "$1" ]; then
+  compileDir="$1"
+ else
+  error 1 "${l_not_find_file}" "$packageName"
+ fi
  
  thisScript="$(readlink -f "$0")" # if user started script with path specified (/usr/bin/ppkg), use it
  if [ ! -e "$thisScript" ]; then # no path
@@ -259,11 +266,18 @@ compileOnePbuild() {
   fi
   thisScript="$(which "$0")"
  fi
+ 
+ local currDir="$PWD"
  cd "$compileDir"
- "$thisScript" --ignore-pbuild --force-o "$outDir" "${args[@]}"
+ local ret=0
+ "$thisScript" --ignore-pbuild --force-o "$outDir" "${args[@]}" || ret=$?
  cd "$currDir"
  
- [ $2 -eq 2 ] && rm -rf "$compileDir"
+ if [ $ret -ne 0 ]; then
+  warning "${l_error_with_pbuild}" "$packageName"
+ fi
+ 
+ [ $toDeleteFolder -eq 1 ] && rm -rf "$compileDir"
  return 0
 }
 
@@ -339,7 +353,7 @@ extractSources() {
    ln -s "$(getabslocalfilename "$localname")" "$srcdir"
   fi
   # check if in noextract array
-  if inArray "$file" "${noextract[@]}"; then
+  if inArray "${file##*/}" "${noextract[@]}"; then
    continue # skip
   fi
   
@@ -562,9 +576,10 @@ signPkg() {
  local args=""
  [ "$gpgKey" != "" ] && local args="-u $gpgKey"
  
- gpg -b --use-agent $args "$1" &> /dev/null
+ local ret=0
+ gpg -b --use-agent $args "$1" &> /dev/null || ret=$?
  
- if [ $? -ne 0 ]; then
+ if [ $ret -ne 0 ]; then
   error 1 "${l_error_signing}" "$1"
  fi
 }
@@ -788,6 +803,7 @@ Options:
   -d, --download | download sources, then exit
   -e, --extract  | download and extract sources, then exit
   -B, --build    | build package, then exit
+  -r, --repackage| repackage without rebuilding
   -s, --split    | split package into EXE, DEV, DOC and NLS
   -S, --no-split | don't split package into EXE, DEV, DOC and NLS
   
@@ -876,6 +892,7 @@ forceOut=0
 downloadOnly=0
 extractOnly=0
 buildOnly=0
+repackageOnly=0
 forceSplit=-1
 forceSign=-1
 
@@ -907,6 +924,7 @@ while [[ $1 ]]; do
   -d|--download) downloadOnly=1 ;;
   -e|--extract) extractOnly=1 ;;
   -B|--build) buildOnly=1 ;;
+  -r|--repackage) repackageOnly=1; forceCleanup=0 ;;
   -s|--split) forceSplit=1 ;;
   -S|--no-split) forceSplit=0 ;;
   
@@ -924,7 +942,11 @@ done
 # check for needed programs
 if [ "$(inBuildOptions fakeroot)" = "+" ]; then
  if ! type -p fakeroot > /dev/null; then
-  error 1  "${l_not_have_install}" "fakeroot" "ppkg.conf"
+  if [ $EUID -ne 0 ]; then
+   error 1  "${l_not_have_install}" "fakeroot" "ppkg.conf"
+  else
+   warning "${l_not_have_install}" "fakeroot" "ppkg.conf"
+  fi
  fi
 fi
 
@@ -1027,16 +1049,17 @@ else
 fi
 
 if [ $inFakeRoot -eq 0 ]; then
- [ -d "$srcdir" ] && rm -rf "$srcdir"
- mkdir -p "$srcdir"
- 
- getSources
- 
- extractSources
- 
- runBuild
- runCheck
- 
+ if [ $repackageOnly -eq 0 ] || [[ $repackageOnly -eq 1 && ! -d "$srcdir" ]]; then # if not repackaging or repackageing but srcdir doesn't exist
+  [ -d "$srcdir" ] && rm -rf "$srcdir"
+  mkdir -p "$srcdir"
+  
+  getSources
+  
+  extractSources
+  
+  runBuild
+  runCheck
+ fi
  if [[ $EUID -ne 0 && "$(inBuildOptions fakeroot)" = "+" ]]; then # not root, using fakeroot
   enterFakeroot
   exit $?

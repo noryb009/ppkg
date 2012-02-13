@@ -53,3 +53,4 @@ l_signing="Signing package..."
 l_no_keys="You do not have any keys in your GPG keyring."
 l_key_not_exist="The key %s doesn't exist in your GPG keyring." # %s(key)
 l_error_signing="Error signing '%s', exiting..." # %s(file)
+l_error_with_pbuild="%s had an error while compiling the pBuild file" # %s(package name)
