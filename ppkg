@@ -34,26 +34,26 @@ LANGPATH="$LANGBASE/${LANG%_*}/ppkg"
 # plain()
 plain() {
  local mesg="$1"; shift
- printf "  $mesg\n" "$@"
+ printf "  ${BLUE}$mesg${ALL_OFF}\n" "$@"
 }
 
 # msg()
 msg() {
  local mesg="$1"; shift
- printf "=> $mesg\n" "$@"
+ printf "${GREEN}=>${ALL_OFF} ${BOLD}$mesg${ALL_OFF}\n" "$@"
 }
 
 # msg2()
 msg2() {
  local mesg="$1"; shift
- printf "  -> $mesg\n" "$@"
+ printf "  ${BLUE}->${ALL_OFF} ${BOLD}$mesg${ALL_OFF}\n" "$@"
 }
 
 # warning(message)
 # prints an error, but doesn't exit
 warning() {
  local mesg="$1"; shift
- printf "${l_warning}: $mesg\n" "$@" 1>&2
+ printf "${RED}${l_warning}:${ALL_OFF} ${BOLD}$mesg${ALL_OFF}\n" "$@" 1>&2
 }
 
 # error(errorcode, message)
@@ -62,7 +62,7 @@ error() {
  local errorCode=$1; shift
  local mesg="$1"; shift
  
- printf "${l_error}: $mesg\n" "$@" 1>&2
+ printf "${RED}${l_error}:${ALL_OFF} ${BOLD}$mesg${ALL_OFF}\n" "$@" 1>&2
  exit ${errorCode}
 }
 
@@ -239,8 +239,8 @@ createPbuild() {
 }
 
 compileOnePbuild() {
- local packageName="${1##*/}"
- packageName="${1%-*-*}"
+ local packageName="${1##*/}" # get base name
+ packageName="${packageName%/}" # remove / at end
  msg "${l_compiling}" "$packageName"
  
  local compileDir
@@ -662,7 +662,8 @@ compresstopkg() {
   
   # compress
   if [ $makePetPkg -eq 1 ]; then # PET package
-   msg2 "${l_creating_pkg}" "PET"
+   
+   msg2 "${l_creating_pkg}" "PET" "${pkgname}${pkgsplit}"
    [ -e "$pkgfullname" ] && rm -rf "$pkgfullname"
    mv -f "$pkgdir-${part}" "$pkgfullname"
    echo "$(getPETpetspecs)" > "$pkgfullname/pet.specs"
@@ -678,12 +679,12 @@ compresstopkg() {
   fi
   
   if [ $makeSfsPkg -eq 1 ]; then # SFS package
-   msg2 "${l_creating_pkg}" "SFS"
+   msg2 "${l_creating_pkg}" "SFS" "${pkgname}${pkgsplit}"
    mksquashfs "$pkgdir-${part}" "$outDir/${pkgfullname}.sfs" $sfsOptions # note: $sfsOptions should not have quotes
   fi
   
   if [ $makeRxzPkg -eq 1 ]; then # RXZ package
-   msg2 "${l_creating_pkg}" "RXZ"
+   msg2 "${l_creating_pkg}" "RXZ" "${pkgname}${pkgsplit}"
    (
     cd "$pkgdir-${part}"
     tar -c * | xz --best > "$outDir/${pkgfullname}.rxz"
@@ -788,6 +789,8 @@ Options:
   -b <file>      | use <file> instead of '$buildscript' to create the package
   -c, --clean-up | clean up build files and folders
   -C, --no-clean-up| don't clean up build files and folders
+      --colour   | colourize output
+      --no-colour| don't colourize output
   -g, --generate | generate md5 sums of the source files
       --sign     | sign packages
   -k <key>, --key <key>| sign package with the GPG key <key>
@@ -888,6 +891,7 @@ runAsUser=0
 inFakeRoot=0
 makePbuild=0
 forceOut=0
+colourOutput=-1
 
 downloadOnly=0
 extractOnly=0
@@ -910,6 +914,8 @@ while [[ $1 ]]; do
   -b) shift; buildFile="$1" ;;
   -c|--clean-up) forceCleanup=1 ;;
   -C|--no-clean-up) forceCleanup=0 ;;
+  --colour) colourOutput=1 ;;
+  --no-colour) colourOutput=0 ;;
   -g|--generate) genMD5=1; skipMD5Check=1 ;; # also skip md5check
   --sign) forceSign=1 ;;
   -k|--key) forceSign=1; shift; gpgKey="$1" ;;
@@ -938,6 +944,28 @@ while [[ $1 ]]; do
  esac
  shift
 done
+
+# colour output
+# from arch's makepkg - for PKGBUILD compatibility, using the same variables
+unset ALL_OFF BOLD BLUE GREEN RED YELLOW
+if [[ -t 2 && $colourOutput -ne 0 && $(inBuildOptions colour) = "+" ]] || [ $colourOutput -eq 1 ]; then
+	if tput setaf 0 &>/dev/null; then
+		ALL_OFF="$(tput sgr0)"
+		BOLD="$(tput bold)"
+		RED="${BOLD}$(tput setaf 1)"
+		GREEN="${BOLD}$(tput setaf 2)"
+		YELLOW="${BOLD}$(tput setaf 3)"
+		BLUE="${BOLD}$(tput setaf 4)"
+	else
+		ALL_OFF="\e[1;0m"
+		BOLD="\e[1;1m"
+		RED="${BOLD}\e[1;31m"
+		GREEN="${BOLD}\e[1;32m"
+		YELLOW="${BOLD}\e[1;33m"
+		BLUE="${BOLD}\e[1;34m"
+	fi
+fi
+readonly ALL_OFF BOLD BLUE GREEN RED YELLOW
 
 # check for needed programs
 if [ "$(inBuildOptions fakeroot)" = "+" ]; then
