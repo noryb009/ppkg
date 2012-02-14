@@ -632,7 +632,7 @@ compresstopkg() {
  msg "${l_compressing}"
  cd "$startdir"
  local file
- local ret
+ local ret=0
  
  shopt -s dotglob
  
@@ -671,13 +671,12 @@ compresstopkg() {
    [ -e "$pkgfullname" ] && rm -rf "$pkgfullname"
    mv -f "$pkgdir-${part}" "$pkgfullname"
    echo "$(getPETpetspecs)" > "$pkgfullname/pet.specs"
-   tar c "${pkgfullname}" | gzip --best > "$outDir/${pkgfullname}.pet"
-   ret=$?
+   tar c "${pkgfullname}" | gzip --best > "$outDir/${pkgfullname}.pet" || ret=$?
    rm -rf "$pkgfullname/pet.specs"
    mv -f "$pkgfullname" "$pkgdir-${part}"
    
    if [ $ret -ne 0 ]; then
-    error 1 "Could not compress the PET package"
+    error 1 "${l_error_commpressing_pkg}" "PET"
    fi
    echo -n "$(getmd5 "$outDir/${pkgfullname}.pet")" >> "$outDir/${pkgfullname}.pet"
   fi

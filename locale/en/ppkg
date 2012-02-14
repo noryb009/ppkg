@@ -1,7 +1,6 @@
 l_warning="Warning"
 l_error="Error"
 l_unknown_error="An unknown error occurred"
-l_not_download_file="Could not download '%s'" # %s(file/folder)
 l_not_download_file_proto="Could not download '%s': unknown protocol" # %s(file/folder)
 l_not_find_file="Could not find '%s'" # %s(file/folder)
 l_not_find_function="Could not find function '%s' in %s" # not find function %s(function name) in %s(PUPPYPKG)
@@ -35,6 +34,7 @@ l_splitting="Splitting package..."
 l_skip_splitting="Skipping splitting"
 l_compressing="Compressing package(s)..."
 l_creating_pkg="Creating %s package for %s..." # Creating %s(type(PET, SFS...)) package for %s(package name)
+l_error_commpressing_pkg="Could not compress the %s package" # %s(type(PET, SFS...))
 l_cleaning="Cleaning up..."
 l_packaging_pkg="Packaging %s..." # %s(package name)
 l_received_signal="Received %s signal, exiting..." # %s(signal)
