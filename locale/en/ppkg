@@ -2,6 +2,7 @@ l_warning="Warning"
 l_error="Error"
 l_unknown_error="An unknown error occurred"
 l_not_download_file="Could not download '%s'" # %s(file/folder)
+l_not_download_file_proto="Could not download '%s': unknown protocol" # %s(file/folder)
 l_not_find_file="Could not find '%s'" # %s(file/folder)
 l_not_find_function="Could not find function '%s' in %s" # not find function %s(function name) in %s(PUPPYPKG)
 l_not_find_var="Could not find %s. Please define it in %s" # Could not find %s(var name). Please define it in %s(configure file)

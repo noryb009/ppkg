@@ -34,19 +34,19 @@ LANGPATH="$LANGBASE/${LANG%_*}/ppkg"
 # plain()
 plain() {
  local mesg="$1"; shift
- printf "  ${BLUE}$mesg${ALL_OFF}\n" "$@"
+ printf "  ${BLUE}$mesg${ALL_OFF}\n" "$@" 1>&2
 }
 
 # msg()
 msg() {
  local mesg="$1"; shift
- printf "${GREEN}=>${ALL_OFF} ${BOLD}$mesg${ALL_OFF}\n" "$@"
+ printf "${GREEN}=>${ALL_OFF} ${BOLD}$mesg${ALL_OFF}\n" "$@" 1>&2
 }
 
 # msg2()
 msg2() {
  local mesg="$1"; shift
- printf "  ${BLUE}->${ALL_OFF} ${BOLD}$mesg${ALL_OFF}\n" "$@"
+ printf "  ${BLUE}->${ALL_OFF} ${BOLD}$mesg${ALL_OFF}\n" "$@" 1>&2
 }
 
 # warning(message)
@@ -239,24 +239,32 @@ createPbuild() {
 }
 
 compileOnePbuild() {
- local packageName="${1##*/}" # get base name
+ local pbuild="$1"
+ local packageName="${pbuild##*/}" # get base name
  packageName="${packageName%/}" # remove / at end
  msg "${l_compiling}" "$packageName"
  
  local compileDir
  local toDeleteFolder=0
- if [ -f "$1" ]; then
+ 
+ if ! islocal "$pbuild"; then # online
+  [ -f "$packageName" ] && rm -f "$packageName"
+  downloadOneFile "$pbuild" "$packageName"
+  pbuild="$packageName"
+ fi
+ 
+ if [ -f "$pbuild" ]; then
   local packageFolder="${packageName%.pbuild*}" # remove extension
   [ -f "$startdir/$packageFolder" ] && packageFolder="$packageFolder-build" # use -build suffix if pbuild is in the way
   compileDir="$startdir/$packageFolder"
   [[ -d "$compileDir" && $repackageOnly -eq 0 ]] && rm -rf "$compileDir"
   [ ! -d "$compileDir" ] && mkdir "$compileDir"
   
-  tar xzf "$1" --strip-components=1 -C "$compileDir"
+  tar xzf "$pbuild" --strip-components=1 -C "$compileDir"
   
   [ $2 -eq 2 ] && toDeleteFolder=1
- elif [ -d "$1" ]; then
-  compileDir="$1"
+ elif [ -d "$pbuild" ]; then
+  compileDir="$pbuild"
  else
   error 1 "${l_not_find_file}" "$packageName"
  fi
@@ -283,6 +291,17 @@ compileOnePbuild() {
  return 0
 }
 
+# downloadOneFile(remoteFile, saveTo)
+downloadOneFile() {
+ local connectType="$(getremotetype "$1")"
+ case "$connectType" in
+  http) wget -c -t 3 --waitretry=3 -O "$2" "$1" ;;
+  https) wget -c -t 3 --waitretry=3 --no-check-certificate -O "$2" "$1" ;;
+  ftp) wget -c --passive-ftp -t 3 --waitretry=3 -O "$2" "$1" ;;
+  *) error 1 "${l_not_download_file_proto}" "$1" ;;
+ esac
+}
+
 getSources() {
  msg "${l_getting_sources}"
  
@@ -290,8 +309,6 @@ getSources() {
  local file
  local fileNumber=-1
  local localname
- local connectType
- local ret
  
  for file in "${sources[@]}"; do
   fileNumber=$((fileNumber+1)) # next file number
@@ -302,23 +319,8 @@ getSources() {
     error 1 "${l_not_find_file}" "$file"
    else # remote
     localname="$srcdest/$(getlocalfilename "$file")"
-    connectType="$(getremotetype "$file")"
+    downloadOneFile "$file" "${localname}.part"
     
-    case "$connectType" in
-     http) 
-      wget -c -t 3 --waitretry=3 -O "${localname}.part" "$file"
-      ret=$? ;;
-     https) 
-      wget -c -t 3 --waitretry=3 --no-check-certificate -O "${localname}.part" "$file"
-      ret=$? ;;
-     ftp)
-      wget -c --passive-ftp -t 3 --waitretry=3 -O "${localname}.part" "$file"
-      ret=$? ;;
-     *) error 1 "Could not download $file: unknown protocol" ;;
-    esac
-    if [ $ret -ne 0 ]; then
-     error 1 "${l_not_download_file}" "$file"
-    fi
     checkmd5 "${localname}.part" $fileNumber # check md5 sum
     mv "${localname}.part" "$localname"
    fi
