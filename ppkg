@@ -176,16 +176,15 @@ getmd5() {
 
 generateMD5() {
  local localname
- local output="md5sums=("
+ echo "md5sums=("
  for file in "${sources[@]}"; do
   if localname="$(getabslocalfilename "$file")"; then # local or already downloaded
-   output="$output '$(getmd5 "$localname")'"
+   echo "         '$(getmd5 "$localname")'"
   else
    error 1 "${l_not_find_file}" "$(getlocalfilename "$file")"
   fi
  done
- output="$output )"
- echo "$output" >> "$buildFile"
+ echo ")"
 }
 
 # checkmd5(file, md5sum)
@@ -328,8 +327,9 @@ getSources() {
  done
  
  if [ $genMD5 -eq 1 ]; then # if generating MD5 sums
+  cd "$startdir"
   msg "${l_appending_md5}" "$buildFile"
-  generateMD5
+  generateMD5 >> "$buildFile"
   exit 0
  fi
  
