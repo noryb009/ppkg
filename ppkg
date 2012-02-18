@@ -179,7 +179,7 @@ generateMD5() {
  echo "md5sums=("
  for file in "${sources[@]}"; do
   if localname="$(getabslocalfilename "$file")"; then # local or already downloaded
-   echo "         '$(getmd5 "$localname")'"
+   echo "    '$(getmd5 "$localname")'"
   else
    error 1 "${l_not_find_file}" "$(getlocalfilename "$file")"
   fi
@@ -239,8 +239,10 @@ createPbuild() {
 
 compileOnePbuild() {
  local pbuild="$1"
- local packageName="${pbuild##*/}" # get base name
- packageName="${packageName%/}" # remove / at end
+ 
+ local packageName="${pbuild%/}" # remove / at end
+ packageName="${packageName##*/}" # get base name
+ 
  msg "${l_compiling}" "$packageName"
  
  local compileDir
@@ -450,7 +452,7 @@ runFunction() {
  if type -p "$1" > /dev/null; then
   $1 # run function
  else
-  warning "${l_not_find_function}" "$1" "$buildFile"
+  [ "$1" = package_* ] && warning "${l_not_find_function}" "$1" "$buildFile"
  fi
  
  eval "$shellopts" # restore options
@@ -482,6 +484,7 @@ runPackage() {
 
 runAfterSplit() {
  [ $skipSplitting = 1 ] && return 0
+ cd "$pkgdir"
  msg "${l_fixing_split}"
  if [ $MULTIPKG -eq 0 ]; then # not multi package
   runFunction "afterSplit"
@@ -490,15 +493,11 @@ runAfterSplit() {
  fi
 }
 
-strip() {
- strippkg "$pkgdir" &> /dev/null
-}
-
 runPackageOps() {
  msg "${l_running_pkg_options}"
  if [ "$(inOptions strip)" = "+" ]; then
   msg2 "${l_shrinking}"
-  strip
+  strippkg "$pkgdir" &> /dev/null
  fi
 }
 
@@ -1082,9 +1081,10 @@ fi
 if [ $inFakeRoot -eq 0 ]; then
  if [ $repackageOnly -eq 0 ] || [[ $repackageOnly -eq 1 && ! -d "$srcdir" ]]; then # if not repackaging or repackageing but srcdir doesn't exist
   [ -d "$srcdir" ] && rm -rf "$srcdir"
-  mkdir -p "$srcdir"
   
   getSources
+  
+  mkdir -p "$srcdir"
   
   extractSources
   

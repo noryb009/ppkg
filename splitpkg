@@ -117,8 +117,4 @@ do
 	unset PKG
 done
 
-# if the EXE package is empty, remove it
-is_empty=$(find "$PKG_PATH" -type f)
-[ -z "$is_empty" ] && rm -rf "$PKG_PATH"
-
 exit 0
