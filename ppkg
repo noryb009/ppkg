@@ -366,7 +366,7 @@ extractSources() {
   local decompress
   case "$file" in
    *tar) decompress="" ;;
-   *tar.gz) decompress="z" ;;
+   *tar.gz|*tgz) decompress="z" ;;
    *tar.bz2) decompress="j" ;;
    *tar.xz) decompress="J" ;;
    *) continue
