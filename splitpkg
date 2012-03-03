@@ -1,5 +1,5 @@
 #!/bin/sh
-
+# splitpkg was created by Dima Krasner (iguleder). This script is NOT licenced by the GPL2.
 # splitpkg: splits a binary package
 
 # the usage message

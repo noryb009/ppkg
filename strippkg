@@ -1,5 +1,5 @@
 #!/bin/sh
-
+# strippkg was created by Dima Krasner (iguleder). This script is NOT licenced by the GPL2.
 # strippkg: strips a binary package
 
 # the usage message
